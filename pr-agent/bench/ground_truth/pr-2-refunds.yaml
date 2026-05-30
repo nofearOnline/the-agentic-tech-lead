@@ -1,0 +1,238 @@
+# Planted issues in PR #2 (feature/refunds-and-history).
+
+pr: 2
+title: "Add refunds endpoint and customer transaction history"
+size: medium
+match_tolerance_lines: 10
+
+issues:
+  - id: pr2-performance-history-in-memory-filter
+    category: performance
+    severity: must
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [16, 24]
+    description: >
+      `transactions.findAll()` pulls every row in the table and then
+      filters by customerId in JS. Scales O(all transactions) per request
+      and will fall over the moment there's real data.
+    match_keywords:
+      - findAll
+      - in memory
+      - in-memory
+      - filter
+      - scan
+      - scale
+      - performance
+      - findByCustomer
+      - index
+
+  - id: pr2-performance-n-plus-one-refund-enrich
+    category: performance
+    severity: must
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [33, 46]
+    description: >
+      For each transaction we call `enrichTransactionWithRefunds`, which
+      calls `listRefundsForTransaction`, which scans the entire refunds
+      store. Classic N+1 (actually N*M).
+    match_keywords:
+      - N+1
+      - N + 1
+      - n plus one
+      - loop
+      - per transaction
+      - per-transaction
+      - batch
+      - join
+
+  - id: pr2-correctness-broken-sort-cents
+    category: correctness
+    severity: should
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [25, 31]
+    description: >
+      Sort uses `a.created_at` / `b.created_at`, but the Transaction
+      object has `createdAt` (camelCase). The snake_case field is added
+      only at response shaping time, so the sort key is `undefined` for
+      every row - sort is effectively a no-op.
+    match_keywords:
+      - sort
+      - created_at
+      - createdAt
+      - undefined
+      - case
+      - broken sort
+
+  - id: pr2-security-card-pan-in-response
+    category: security
+    severity: must
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [38, 40]
+    description: >
+      Response includes `card_number` when present on the transaction
+      (PR3 puts it there). Even with the fallback to `cardLast4`, the
+      controller is shaped to expose full PAN if it's stored.
+    match_keywords:
+      - card_number
+      - PAN
+      - card
+      - PCI
+      - PII
+      - mask
+      - last4
+
+  - id: pr2-correctness-refund-amount-coercion
+    category: correctness
+    severity: must
+    file: payments-service/src/services/refundsService.ts
+    line_range: [33, 44]
+    description: >
+      "Sometimes clients send dollars" heuristic multiplies by 100 and
+      hopes for the best. Currency unit should never be inferred - it
+      should be rejected at the schema boundary.
+    match_keywords:
+      - dollars
+      - cents
+      - "* 100"
+      - "100"
+      - coerce
+      - units
+      - currency
+
+  - id: pr2-correctness-refund-no-amount-cap
+    category: correctness
+    severity: should
+    file: payments-service/src/services/refundsService.ts
+    line_range: [22, 50]
+    description: >
+      No check against the sum of prior refunds for the same transaction.
+      Easy to over-refund by calling /refunds twice.
+    match_keywords:
+      - over-refund
+      - over refund
+      - double refund
+      - sum
+      - cap
+      - already refunded
+      - prior refund
+      - idempotency
+
+  - id: pr2-quality-module-level-state
+    category: quality
+    severity: should
+    file: payments-service/src/services/refundsService.ts
+    line_range: [16, 17]
+    description: >
+      `const refundsStore: Record<string, RefundResult> = {}` is a
+      module-level singleton. Leaks across tests, can't be swapped, can't
+      be reset. The rest of the codebase injects repositories.
+    match_keywords:
+      - singleton
+      - module-level
+      - module level
+      - global state
+      - inject
+      - dependency injection
+      - DI
+      - testability
+
+  - id: pr2-correctness-zero-amount-refund
+    category: correctness
+    severity: should
+    file: payments-service/src/services/refundsService.ts
+    line_range: [27, 31]
+    description: >
+      `if (refundAmount == null)` defaults to full amount, but explicit
+      `0` is accepted as a valid refund. Should reject non-positive
+      amounts.
+    match_keywords:
+      - zero
+      - negative
+      - non-positive
+      - validate
+      - positive
+      - amount
+
+  - id: pr2-quality-console-log-business-events
+    category: quality
+    severity: should
+    file: payments-service/src/services/refundsService.ts
+    line_range: [22, 49]
+    description: >
+      `console.log` for "refund created", "transaction not found" and
+      similar business events bypasses the configured Pino logger,
+      breaking structured logging and PII redaction.
+    match_keywords:
+      - console.log
+      - pino
+      - logger
+      - structured
+      - log
+
+  - id: pr2-validation-loose-refund-schema
+    category: quality
+    severity: should
+    file: payments-service/src/http/validators/refundSchema.ts
+    line_range: [3, 7]
+    description: >
+      `amount: z.number().optional()` accepts negative numbers, zero,
+      and non-integer cents. `reason` is also unconstrained.
+    match_keywords:
+      - zod
+      - validation
+      - positive
+      - integer
+      - schema
+      - .int()
+      - .positive()
+      - amount
+
+  - id: pr2-correctness-refund-empty-200
+    category: correctness
+    severity: should
+    file: payments-service/src/http/controllers/refundsController.ts
+    line_range: [14, 18]
+    description: >
+      Missing transaction returns `200 OK` with `{}`. Should be `404 Not
+      Found`. Hides bugs and breaks idempotency-key clients.
+    match_keywords:
+      - "200"
+      - "404"
+      - not found
+      - status code
+      - empty body
+      - "{}"
+
+  - id: pr2-test-passes-for-wrong-reason
+    category: test
+    severity: must
+    file: payments-service/tests/refunds.test.ts
+    line_range: [5, 38]
+    description: >
+      Tests only assert `expect(...).toBeDefined()` or `status < 500`.
+      They pass whether the refund worked, was empty, or was wrong.
+      Tests-that-pass-for-the-wrong-reason.
+    match_keywords:
+      - toBeDefined
+      - tautological
+      - wrong reason
+      - weak assertion
+      - assert
+      - meaningful
+      - test quality
+
+  - id: pr2-standards-response-naming-snake
+    category: standards
+    severity: suggestion
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [36, 49]
+    description: >
+      Response uses snake_case (`card_number`, `customer_id`,
+      `created_at`) while existing endpoints (`/transactions/:id`) use
+      camelCase. Inconsistent contract.
+    match_keywords:
+      - snake_case
+      - camelCase
+      - naming
+      - inconsistent
+      - convention

@@ -1,0 +1,43 @@
+# Shared configuration for every version of the PR-review agent and for
+# the eval harness. Edit this file to swap models, change pricing, or
+# tune eval behavior. Nothing in pr-agent/v*/ should hardcode a model
+# name or a price; everything reads from here.
+
+repo:
+  # Target repo whose PRs we review. The agent fetches diffs via `gh pr diff`
+  # against this slug. Worktree-based versions (v2+) will clone here.
+  owner: nofearOnline
+  name: the-agentic-tech-lead
+
+models:
+  # Logical role -> Anthropic model id. Pin to dated snapshots in CI;
+  # alias names are fine for local development.
+  generalist: claude-sonnet-4-5             # v1, v2 reviewer
+  scout: claude-sonnet-4-5                  # v4 scout (agentic loop)
+  specialist_reasoning: claude-sonnet-4-5   # v3/v4 specialists needing judgment (architecture, safety)
+  specialist_narrow: claude-haiku-4-5       # v3/v4 specialists for narrow lenses (conventions, tests, design system)
+  tier1: claude-haiku-4-5                   # v5 Tier 1 mechanical findings
+  skeptic: claude-sonnet-4-5                # v4 final filter pass
+
+eval:
+  trials_per_pr: 3
+  max_cost_per_run_usd: 5.0     # bail if a single review run exceeds this
+  output_dir: bench/results     # relative to pr-agent/
+  prs:                           # which PR numbers to evaluate against
+    - 1
+    - 2
+    - 3
+
+# USD per 1M tokens. Update when Anthropic changes prices.
+# Sources of truth: https://www.anthropic.com/pricing
+pricing:
+  claude-sonnet-4-5:
+    input: 3.00
+    input_cache_write: 3.75
+    input_cache_read: 0.30
+    output: 15.00
+  claude-haiku-4-5:
+    input: 1.00
+    input_cache_write: 1.25
+    input_cache_read: 0.10
+    output: 5.00

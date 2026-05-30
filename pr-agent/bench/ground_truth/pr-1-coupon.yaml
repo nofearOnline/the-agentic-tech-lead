@@ -1,0 +1,207 @@
+# Planted issues in PR #1 (feature/coupon-discount).
+#
+# Each issue has match keywords. A finding from the agent counts as a
+# match for an issue if:
+#   1. its file equals the issue file (after normalization), AND
+#   2. its line range overlaps issue.line_range +/- match_tolerance, AND
+#   3. at least one of match_keywords appears (case-insensitive) in the
+#      finding's title or message.
+
+pr: 1
+title: "Add coupon discount support to charge endpoint"
+size: small
+match_tolerance_lines: 8
+
+issues:
+  - id: pr1-security-card-pan-logged
+    category: security
+    severity: must
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [14, 16]
+    description: >
+      `console.log('DEBUG charge body:', JSON.stringify(theData))` writes the
+      entire charge body - including raw PAN and CVC - to stdout / log
+      aggregator. Plain-text PCI in logs is a hard violation.
+    match_keywords:
+      - console.log
+      - log
+      - card
+      - PAN
+      - CVC
+      - PCI
+      - PII
+      - sensitive
+      - leak
+      - secret
+
+  - id: pr1-quality-silent-error-swallow
+    category: quality
+    severity: must
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [21, 24]
+    description: >
+      `catch (e) { // TODO }` swallows every error from `doStuff` silently.
+      A bad coupon, an undefined input, anything - all dropped on the floor.
+    match_keywords:
+      - swallow
+      - silent
+      - empty catch
+      - TODO
+      - ignore
+      - error
+      - catch
+
+  - id: pr1-correctness-discount-always-zero
+    category: correctness
+    severity: must
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [32, 34]
+    description: >
+      `payload.amount = finalAmount` mutates the parsed payload, then
+      `payload.amount - finalAmount` is computed - always zero. The
+      `discount_amount` field returned to the client is always 0.
+    match_keywords:
+      - discount_amount
+      - mutate
+      - always 0
+      - always zero
+      - "0"
+
+  - id: pr1-standards-snake-case-response
+    category: standards
+    severity: should
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [33, 34]
+    description: >
+      Response now mixes camelCase (existing fields) with snake_case
+      (`discount_amount`, `coupon_code`). Pick one - the rest of the API
+      uses camelCase.
+    match_keywords:
+      - snake_case
+      - camelCase
+      - naming
+      - inconsistent
+      - convention
+
+  - id: pr1-correctness-coupon-not-validated
+    category: correctness
+    severity: should
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [12, 13]
+    description: >
+      `couponCode = theData.couponCode` is pulled off the raw body and used
+      without ever being part of `chargeSchema`. Untyped, untrusted input
+      reaching business logic.
+    match_keywords:
+      - validation
+      - validate
+      - schema
+      - zod
+      - couponCode
+      - untrusted
+
+  - id: pr1-kiss-strategy-factory-overengineered
+    category: kiss
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [5, 51]
+    description: >
+      Abstract base class + two Strategy subclasses + a Factory for a
+      static 6-row lookup. A flat `Record<string, {kind, value}>` and a
+      single function is the right size.
+    match_keywords:
+      - over-engineer
+      - overengineer
+      - over engineered
+      - factory
+      - strategy
+      - abstract
+      - simpler
+      - KISS
+      - YAGNI
+
+  - id: pr1-correctness-float-money
+    category: correctness
+    severity: must
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [13, 16]
+    description: >
+      `amount * (1 - this.p)` then `Math.floor` performs floating-point
+      multiplication on currency in cents and silently truncates fractions
+      of a cent. Use integer math or a money library.
+    match_keywords:
+      - float
+      - floating
+      - precision
+      - rounding
+      - Math.floor
+      - cents
+      - currency
+      - money
+      - decimal
+
+  - id: pr1-quality-bad-naming
+    category: quality
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [53, 65]
+    description: >
+      `doStuff`, `tmp`, `result2`, `x`, `p`, `amt`, `theData` - exported
+      and internal names are uninformative. The exported entry point in
+      particular is called `doStuff`.
+    match_keywords:
+      - doStuff
+      - naming
+      - name
+      - rename
+      - meaningful
+      - descriptive
+      - tmp
+      - result2
+
+  - id: pr1-standards-var-and-loose-equality
+    category: standards
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [14, 60]
+    description: >
+      `var` (instead of `let`/`const`) and `==` (instead of `===`) appear
+      throughout. The surrounding codebase uses `const`/`let` and `===`
+      consistently.
+    match_keywords:
+      - var
+      - "==="
+      - "=="
+      - loose equality
+      - strict equality
+      - let
+      - const
+
+  - id: pr1-quality-dead-code-comment
+    category: quality
+    severity: suggestion
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [44, 47]
+    description: >
+      Commented-out `FREESHIP` branch left in. Either implement it or
+      delete; commented dead code rots.
+    match_keywords:
+      - commented
+      - dead code
+      - FREESHIP
+      - comment out
+
+  - id: pr1-test-no-tests-added
+    category: test
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [1, 65]
+    description: >
+      A new pricing function with branching, factory dispatch, and silent
+      error paths ships with zero unit tests.
+    match_keywords:
+      - test
+      - tests
+      - coverage
+      - untested
+      - unit test

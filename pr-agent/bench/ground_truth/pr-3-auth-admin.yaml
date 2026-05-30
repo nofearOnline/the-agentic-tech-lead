@@ -1,0 +1,465 @@
+# Planted issues in PR #3 (feature/auth-admin-webhooks).
+
+pr: 3
+title: "Add user auth, admin dashboard, and outgoing webhooks"
+size: large
+match_tolerance_lines: 10
+
+issues:
+  # ---- secrets / config ----
+  - id: pr3-security-env-committed
+    category: security
+    severity: must
+    file: payments-service/.env
+    line_range: [1, 6]
+    description: >
+      `.env` with `JWT_SECRET`, `ADMIN_API_KEY`, `PAYMENT_GATEWAY_LIVE_KEY`
+      is committed to the repo. Multiple production secrets in version
+      control.
+    match_keywords:
+      - .env
+      - secret
+      - committed
+      - credential
+      - key
+      - JWT_SECRET
+      - ADMIN_API_KEY
+      - LIVE_KEY
+      - gitignore
+
+  - id: pr3-security-gitignore-override-env
+    category: security
+    severity: must
+    file: payments-service/.gitignore
+    line_range: [5, 9]
+    description: >
+      `.gitignore` is changed to UN-ignore `.env` (`!.env`), explicitly
+      opting the file in to source control.
+    match_keywords:
+      - .gitignore
+      - "!.env"
+      - un-ignore
+      - unignore
+      - exception
+      - source control
+
+  # ---- jwt / auth ----
+  - id: pr3-security-jwt-secret-fallback
+    category: security
+    severity: must
+    file: payments-service/src/auth/jwt.ts
+    line_range: [3, 3]
+    description: >
+      `const SECRET = process.env.JWT_SECRET || 'dev-secret-123'` silently
+      falls back to a hardcoded secret in production if the env var is
+      missing.
+    match_keywords:
+      - hardcoded
+      - hard-coded
+      - fallback
+      - default secret
+      - dev-secret
+      - JWT_SECRET
+      - throw
+
+  - id: pr3-security-master-key-backdoor
+    category: security
+    severity: must
+    file: payments-service/src/auth/jwt.ts
+    line_range: [15, 18]
+    description: >
+      `verifyToken` returns an admin payload for the literal string
+      'admin-master-key'. A hardcoded backdoor that grants full admin.
+    match_keywords:
+      - admin-master-key
+      - backdoor
+      - master key
+      - hardcoded
+      - bypass
+
+  - id: pr3-security-jwt-no-algorithm-pin
+    category: security
+    severity: should
+    file: payments-service/src/auth/jwt.ts
+    line_range: [12, 14]
+    description: >
+      `jwt.sign(payload, SECRET)` without `algorithm` and `jwt.verify`
+      without `algorithms` allows algorithm confusion (e.g. `alg:none` or
+      RS256/HS256 swap).
+    match_keywords:
+      - algorithm
+      - alg
+      - none
+      - confusion
+      - HS256
+      - RS256
+      - pin
+
+  - id: pr3-security-predictable-reset-token
+    category: security
+    severity: must
+    file: payments-service/src/auth/jwt.ts
+    line_range: [27, 29]
+    description: >
+      `generateResetToken` is `userId + '-' + Math.random() + '-' +
+      Date.now()`. Predictable / non-cryptographic - attacker can guess
+      reset tokens.
+    match_keywords:
+      - Math.random
+      - predictable
+      - reset token
+      - cryptographic
+      - randomBytes
+      - secure random
+      - entropy
+
+  - id: pr3-security-md5-password-hash
+    category: security
+    severity: must
+    file: payments-service/src/auth/passwordHash.ts
+    line_range: [3, 9]
+    description: >
+      Passwords are hashed with MD5 - no salt, no work factor, broken
+      hash function. Use bcrypt/scrypt/argon2.
+    match_keywords:
+      - md5
+      - hash
+      - bcrypt
+      - scrypt
+      - argon2
+      - salt
+      - work factor
+      - broken
+      - password
+
+  # ---- userStore.ts ----
+  - id: pr3-security-ts-nocheck
+    category: security
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [1, 1]
+    description: >
+      `@ts-nocheck` disables the type checker for an entire auth-critical
+      file. Type safety lost exactly where it matters most.
+    match_keywords:
+      - "@ts-nocheck"
+      - ts-nocheck
+      - tsnocheck
+      - type check
+      - typescript
+
+  - id: pr3-security-eval-in-where-clause
+    category: security
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [50, 65]
+    description: >
+      `evalWhere` builds a JS expression from a SQL WHERE clause and runs
+      it through `eval()`. Arbitrary code execution masquerading as a
+      query planner.
+    match_keywords:
+      - eval
+      - arbitrary code
+      - RCE
+      - injection
+      - code execution
+
+  - id: pr3-security-sql-injection-insert
+    category: security
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [73, 78]
+    description: >
+      `createUser` builds an INSERT via template-string interpolation of
+      `email`, `passwordHash`, `role`. A user-supplied email containing a
+      quote escapes the statement (and via `eval`, escapes everything).
+    match_keywords:
+      - injection
+      - SQL injection
+      - sanitize
+      - parameterized
+      - prepared
+      - template
+      - interpolation
+
+  - id: pr3-security-find-user-logs-sql
+    category: security
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [82, 86]
+    description: >
+      `findUserByEmail` logs the constructed SQL string - which contains
+      the user-supplied email - via `console.log`. Email is PII.
+    match_keywords:
+      - console.log
+      - PII
+      - email
+      - log
+      - sensitive
+
+  - id: pr3-security-listusers-arbitrary-filter
+    category: security
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [88, 94]
+    description: >
+      `listAllUsers(filter)` passes a caller-supplied filter string
+      directly into the WHERE clause (which is then `eval()`-ed). Admin
+      endpoint, but combined with the bypass flag, anyone can run code.
+    match_keywords:
+      - filter
+      - injection
+      - eval
+      - arbitrary
+      - WHERE
+      - listAllUsers
+
+  # ---- authMiddleware ----
+  - id: pr3-security-admin-bypass-query-flag
+    category: security
+    severity: must
+    file: payments-service/src/auth/authMiddleware.ts
+    line_range: [9, 13]
+    description: >
+      `?adminBypass=1` skips auth and grants admin role. The query flag
+      ships to production.
+    match_keywords:
+      - adminBypass
+      - bypass
+      - debug
+      - backdoor
+      - query parameter
+      - skip
+
+  - id: pr3-security-admin-by-email-suffix
+    category: security
+    severity: must
+    file: payments-service/src/auth/authMiddleware.ts
+    line_range: [33, 38]
+    description: >
+      `requireAdmin` grants admin to anyone whose email ends in
+      `@admin.com` or `@honeybook.com`. Email suffix is not an identity.
+    match_keywords:
+      - email
+      - suffix
+      - endsWith
+      - "@admin"
+      - "@honeybook"
+      - role
+      - authorization
+      - RBAC
+
+  # ---- adminController duplication ----
+  - id: pr3-dry-admin-role-check-duplicated
+    category: dry
+    severity: should
+    file: payments-service/src/http/controllers/adminController.ts
+    line_range: [9, 60]
+    description: >
+      Every admin handler re-checks the email suffix inline, duplicating
+      the logic in `requireAdmin`. The middleware exists but isn't used;
+      checks drift.
+    match_keywords:
+      - duplicate
+      - duplicated
+      - DRY
+      - middleware
+      - requireAdmin
+      - copy
+      - repeat
+
+  # ---- webhooks SSRF ----
+  - id: pr3-security-webhook-ssrf
+    category: security
+    severity: must
+    file: payments-service/src/services/webhooksService.ts
+    line_range: [29, 46]
+    description: >
+      Webhook delivery does `fetch(hook.url)` to a user-supplied URL with
+      `redirect: 'follow'` and no allowlist. Classic SSRF -
+      `http://169.254.169.254/...` reachable from the pod.
+    match_keywords:
+      - SSRF
+      - server-side request forgery
+      - allowlist
+      - metadata
+      - 169.254
+      - internal
+      - localhost
+      - redirect
+
+  - id: pr3-perf-webhook-sync-in-charge
+    category: performance
+    severity: must
+    file: payments-service/src/services/paymentsService.ts
+    line_range: [62, 66]
+    description: >
+      `await this.webhooks.fireForTransaction(transaction)` runs in the
+      charge request path. Latency is now `latency(gateway) +
+      sum(latency of every registered webhook)`.
+    match_keywords:
+      - synchronous
+      - sync
+      - blocking
+      - request path
+      - queue
+      - async
+      - latency
+      - webhook
+
+  - id: pr3-quality-webhook-fire-no-auth
+    category: security
+    severity: must
+    file: payments-service/src/services/webhooksService.ts
+    line_range: [28, 30]
+    description: >
+      Webhook payload includes the FULL transaction object, including
+      `card_number` and `cvc` (added in this PR). Card data POSTed to
+      arbitrary URLs.
+    match_keywords:
+      - card_number
+      - cvc
+      - PAN
+      - PII
+      - PCI
+      - payload
+      - leak
+      - secret
+
+  # ---- paymentsService changes ----
+  - id: pr3-security-store-pan-cvc
+    category: security
+    severity: must
+    file: payments-service/src/services/paymentsService.ts
+    line_range: [38, 50]
+    description: >
+      Transaction object now stores `card_number` (full PAN) and `cvc`,
+      and `transactions.save()` persists them. PCI-DSS prohibits storing
+      the CVC under any circumstances, and full PAN must be encrypted.
+    match_keywords:
+      - PAN
+      - CVC
+      - card_number
+      - store
+      - PCI
+      - PCI-DSS
+      - persist
+      - encrypt
+      - tokenize
+
+  - id: pr3-security-charge-logs-card
+    category: security
+    severity: must
+    file: payments-service/src/services/paymentsService.ts
+    line_range: [53, 54]
+    description: >
+      `console.log('charge processed', JSON.stringify(transaction))` logs
+      the whole transaction including PAN and CVC.
+    match_keywords:
+      - console.log
+      - JSON.stringify
+      - card
+      - PAN
+      - CVC
+      - log
+      - leak
+
+  # ---- adminService eval / CSV ----
+  - id: pr3-security-admin-filter-eval
+    category: security
+    severity: must
+    file: payments-service/src/services/adminService.ts
+    line_range: [12, 22]
+    description: >
+      `new Function('tx', 'return (' + filterExpr + ')')` evaluates
+      caller-supplied JS against every transaction. Same RCE shape as
+      `eval`.
+    match_keywords:
+      - new Function
+      - eval
+      - injection
+      - RCE
+      - arbitrary code
+
+  - id: pr3-security-csv-exports-pan
+    category: security
+    severity: must
+    file: payments-service/src/services/adminService.ts
+    line_range: [49, 64]
+    description: >
+      CSV export includes a `card_number` column with the full PAN. Any
+      admin can download all card numbers.
+    match_keywords:
+      - CSV
+      - card_number
+      - PAN
+      - export
+      - PCI
+
+  # ---- cors / payload ----
+  - id: pr3-security-cors-wildcard-credentials
+    category: security
+    severity: must
+    file: payments-service/src/app.ts
+    line_range: [35, 36]
+    description: >
+      `cors({ origin: '*', credentials: true })` - browsers will reject
+      this combination but more importantly it advertises intent to allow
+      any origin with cookies. Should be an explicit allowlist.
+    match_keywords:
+      - CORS
+      - "origin: '*'"
+      - wildcard
+      - credentials
+      - allowlist
+      - origin
+
+  - id: pr3-security-json-body-5mb
+    category: security
+    severity: should
+    file: payments-service/src/app.ts
+    line_range: [36, 37]
+    description: >
+      Body limit raised from `64kb` to `5mb` with no justification. Easy
+      DoS surface; the existing endpoints don't need it.
+    match_keywords:
+      - 5mb
+      - body limit
+      - DoS
+      - denial of service
+      - 64kb
+      - limit
+
+  - id: pr3-test-auth-tests-shallow
+    category: test
+    severity: should
+    file: payments-service/tests/auth.test.ts
+    line_range: [1, 40]
+    description: >
+      Auth test file covers happy paths but does not exercise the
+      `admin-master-key` backdoor, the `adminBypass` query, the SQL/eval
+      injection paths, or password-reset token leakage.
+    match_keywords:
+      - test
+      - coverage
+      - missing
+      - negative
+      - injection
+      - bypass
+
+  - id: pr3-quality-controller-logs-pii
+    category: security
+    severity: must
+    file: payments-service/src/http/controllers/authController.ts
+    line_range: [60, 75]
+    description: >
+      `requestPasswordReset` logs the reset token with `console.log`,
+      then ALSO returns it in the JSON response. Reset link is now in
+      logs AND accessible to anyone who knows an email.
+    match_keywords:
+      - reset token
+      - console.log
+      - leak
+      - response
+      - PII
+      - email enumeration
