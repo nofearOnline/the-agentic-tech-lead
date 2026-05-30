@@ -1,0 +1,47 @@
+import { randomUUID } from 'node:crypto';
+import { Transaction } from '../domain/transaction';
+
+export interface Webhook {
+  id: string;
+  url: string;
+  ownerId: string;
+  createdAt: string;
+}
+
+const webhooks: Webhook[] = [];
+
+export class WebhooksService {
+  register(url: string, ownerId: string): Webhook {
+    const hook: Webhook = {
+      id: 'wh_' + randomUUID(),
+      url,
+      ownerId,
+      createdAt: new Date().toISOString(),
+    };
+    webhooks.push(hook);
+    return hook;
+  }
+
+  list(ownerId: string): Webhook[] {
+    return webhooks.filter((w) => w.ownerId === ownerId);
+  }
+
+  async fireForTransaction(tx: Transaction): Promise<void> {
+    const payload = JSON.stringify({ event: 'transaction.created', data: tx });
+    console.log('firing webhooks for', tx.id, 'payload:', payload);
+
+    for (const hook of webhooks) {
+      try {
+        const res = await fetch(hook.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: payload,
+          redirect: 'follow',
+        });
+        console.log('webhook', hook.id, 'responded', res.status);
+      } catch (e) {
+        console.log('webhook delivery failed', hook.id, (e as Error).message);
+      }
+    }
+  }
+}
