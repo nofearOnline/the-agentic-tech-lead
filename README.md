@@ -1,73 +1,38 @@
-# payments-service
+# the-agentic-tech-lead
 
-A small, intentionally clean TypeScript + Express payments service used as the demo target for **The Agentic Tech Lead** presentation.
+Demo repository for **The Agentic Tech Lead** presentation.
 
-The service processes card transactions through a fake gateway and exposes a tiny HTTP API. It's deliberately compact (~500 LOC) but follows real-world conventions: strict TypeScript, zod-validated input, structured logging with request IDs, a thin controller layer over a service layer over a repository, and reasonable test coverage.
-
-The "bad" PRs opened against this repo introduce realistic issues (KISS/DRY, performance, security, standards) and are intended to be reviewed by an agentic reviewer during the talk.
-
-## Endpoints
-
-| Method | Path                  | Description                                |
-|--------|-----------------------|--------------------------------------------|
-| POST   | `/charge`             | Authorize and capture a card transaction.  |
-| GET    | `/transactions/:id`   | Fetch a transaction by id.                 |
-| GET    | `/health`             | Liveness probe.                            |
-
-### `POST /charge`
-
-```json
-{
-  "amount": 1999,
-  "currency": "USD",
-  "card": {
-    "number": "4242424242424242",
-    "expMonth": 12,
-    "expYear": 2030,
-    "cvc": "123"
-  },
-  "customerId": "cus_123"
-}
-```
-
-`amount` is in the smallest currency unit (cents). Card numbers are never logged; responses only return `last4`.
-
-## Local development
-
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
-
-## Scripts
-
-| Command         | What it does                          |
-|-----------------|---------------------------------------|
-| `npm run build` | Compile TypeScript to `dist/`.        |
-| `npm start`     | Run the compiled server.              |
-| `npm run dev`   | Watch mode via `ts-node-dev`.         |
-| `npm test`      | Run the Jest test suite.              |
-| `npm run lint`  | Lint with ESLint.                     |
-| `npm run typecheck` | Type-check without emitting.       |
+The repo is split into two pieces: the *thing being reviewed*, and the
+*thing doing the reviewing*. Each version of the reviewer lives in its own
+folder so the talk can walk the audience from "just call the LLM" all the
+way to a real agentic reviewer.
 
 ## Layout
 
 ```
-src/
-  index.ts                  entrypoint
-  app.ts                    express app factory
-  config.ts                 env-driven config
-  logger.ts                 pino logger
-  errors.ts                 AppError + helpers
-  domain/                   transaction + money primitives
-  gateway/                  fake card processor
-  repositories/             in-memory transaction store
-  services/                 business logic
-  http/
-    routes.ts
-    controllers/
-    validators/
-  middleware/
-tests/                      jest + supertest
+the-agentic-tech-lead/
+├── payments-service/        ← the demo target (TypeScript + Express)
+│   └── ...                    A small payments service with three
+│                              intentionally-flawed PRs opened against it.
+└── pr-agent/                ← the reviewer, in versions
+    ├── README.md
+    └── v1_single_shot/        Diff in, review out. One LLM call.
+        └── ...
 ```
+
+## payments-service
+
+A small, intentionally-clean TypeScript + Express service that processes
+card transactions through a fake gateway. See
+[`payments-service/README.md`](payments-service/README.md) for endpoints,
+layout, and how to run it.
+
+Three deliberately-bad PRs are open against it on GitHub, escalating in
+size and in the variety of problems they contain (KISS / quality, then
+DRY / performance, then security / standards).
+
+## pr-agent
+
+Successive versions of a PR-reviewing agent that all target the
+`payments-service` PRs. See [`pr-agent/README.md`](pr-agent/README.md) for
+the version index.
