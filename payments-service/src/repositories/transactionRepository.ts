@@ -3,6 +3,7 @@ import { Transaction } from '../domain/transaction';
 export interface TransactionRepository {
   save(transaction: Transaction): Promise<Transaction>;
   findById(id: string): Promise<Transaction | null>;
+  findAll(): Promise<Transaction[]>;
 }
 
 export class InMemoryTransactionRepository implements TransactionRepository {
@@ -15,5 +16,9 @@ export class InMemoryTransactionRepository implements TransactionRepository {
 
   async findById(id: string): Promise<Transaction | null> {
     return this.store.get(id) ?? null;
+  }
+
+  async findAll(): Promise<Transaction[]> {
+    return Array.from(this.store.values());
   }
 }
