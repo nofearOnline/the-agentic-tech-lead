@@ -1,12 +1,11 @@
 """v1 - single-shot PR review.
 
-The simplest possible reviewer: fetch the PR diff via the `gh` CLI, hand
-the whole thing to one LLM call with a tool that forces structured output,
-and return the resulting findings.
+The simplest possible reviewer: fetch the PR diff via `gh`, hand the whole
+thing to one Claude call with no tools and no loop, and parse a structured
+list of findings out of the response.
 
-No tools beyond `report_findings` (used purely for output shaping).
-No loop. No access to the rest of the repo beyond the diff. This is the
-baseline that the rest of the evolutions improve on.
+No tools. No agentic loop. No access to the repository beyond the diff.
+This is the baseline that the rest of the evolutions improve on.
 
 Public API:
     review(pr, config) -> ReviewResult            # used by the eval harness
@@ -23,31 +22,27 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-# Allow `python review.py ...` from inside the v1 folder to find `shared/`.
+# Make `shared/` importable when running this file directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from anthropic import Anthropic  # noqa: E402
 
 from shared import (  # noqa: E402
     Config,
     Finding,
     PullRequest,
     Usage,
-    compute_cost,
+    call,
+    extract_fenced_json,
     fetch_pull_request,
     load_config,
     parse_pr_arg,
 )
-from shared.config import require_anthropic_api_key  # noqa: E402
-from shared.cost import usage_from_anthropic  # noqa: E402
 
 
 SYSTEM_PROMPT = """\
 You are an experienced engineering tech lead reviewing a pull request.
 
-You will be given the PR title, description, author, and the unified diff of
-the changes. Your job is to find every issue that matters and report it via
-the `report_findings` tool.
+You will be given the PR title, description, author, and the unified diff
+of the changes. Your job is to find every issue that matters.
 
 Categories you should look for:
 - security      secrets in code, injection, broken auth, SSRF, PII / PCI leaks
@@ -64,74 +59,32 @@ Severity:
 - should       quality issues a reviewer would normally request changes for
 - suggestion   nits and improvements that aren't blocking
 
-Always emit through the `report_findings` tool. If the PR looks clean overall,
-return an empty `findings` list and say so in `summary`. Be concrete about
-file paths and line numbers from the diff. Do NOT fabricate line numbers you
-cannot point to in the diff."""
+Output format - REQUIRED.
 
+Reply with a single ```json fenced block. Do not include any other prose
+before or after the block. The block must parse as JSON with this shape:
 
-REPORT_FINDINGS_TOOL = {
-    "name": "report_findings",
-    "description": "Report all issues found in the PR. Call this exactly once at the end.",
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "summary": {
-                "type": "string",
-                "description": "One short paragraph summarizing the review.",
-            },
-            "findings": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "file": {
-                            "type": "string",
-                            "description": "Path of the affected file as it appears in the diff.",
-                        },
-                        "line_start": {"type": "integer"},
-                        "line_end": {"type": "integer"},
-                        "category": {
-                            "type": "string",
-                            "enum": [
-                                "security",
-                                "performance",
-                                "correctness",
-                                "dry",
-                                "kiss",
-                                "test",
-                                "standards",
-                                "quality",
-                            ],
-                        },
-                        "severity": {
-                            "type": "string",
-                            "enum": ["must", "should", "suggestion"],
-                        },
-                        "title": {
-                            "type": "string",
-                            "description": "Short headline, <= 80 chars.",
-                        },
-                        "message": {
-                            "type": "string",
-                            "description": "Full explanation: what is wrong, why it matters, suggested fix.",
-                        },
-                    },
-                    "required": [
-                        "file",
-                        "line_start",
-                        "line_end",
-                        "category",
-                        "severity",
-                        "title",
-                        "message",
-                    ],
-                },
-            },
-        },
-        "required": ["summary", "findings"],
-    },
+```json
+{
+  "summary": "one short paragraph summarizing your review",
+  "findings": [
+    {
+      "file": "path/as/it/appears/in/the/diff",
+      "line_start": 12,
+      "line_end": 18,
+      "category": "security",
+      "severity": "must",
+      "title": "short headline, <= 80 chars",
+      "message": "what is wrong, why it matters, suggested fix"
+    }
+  ]
 }
+```
+
+If the PR is clean overall, return an empty `findings` list and say so
+in `summary`. Use only the file paths that appear in the diff (do not
+fabricate paths). Use line numbers that appear in the diff hunks; if you
+cannot point to a specific line, use the start of the relevant hunk."""
 
 
 @dataclass
@@ -140,7 +93,11 @@ class ReviewResult:
     usage: Usage
     cost_usd: float
     summary: str
-    raw_tool_input: dict | None = None
+    raw_response: str = ""
+    resolved_model: str = ""
+    num_turns: int = 0
+    duration_ms: int = 0
+    error: str | None = None
 
 
 def _build_user_message(pr: PullRequest) -> str:
@@ -159,43 +116,15 @@ def _build_user_message(pr: PullRequest) -> str:
     )
 
 
-def review(pr: PullRequest, config: Config) -> ReviewResult:
-    """Run a single-shot review. Returns structured findings and token usage."""
-    require_anthropic_api_key()
-    model = config.model_for("generalist")
-    pricing = config.pricing_for(model)
-
-    client = Anthropic()
-    response = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        tools=[REPORT_FINDINGS_TOOL],
-        tool_choice={"type": "tool", "name": "report_findings"},
-        messages=[{"role": "user", "content": _build_user_message(pr)}],
-    )
-
-    tool_input: dict | None = None
-    for block in response.content:
-        if getattr(block, "type", None) == "tool_use" and block.name == "report_findings":
-            tool_input = dict(block.input)
-            break
-
-    if tool_input is None:
-        # Model refused to call the tool. Treat as zero findings; record raw text.
-        text = "\n".join(
-            getattr(b, "text", "") for b in response.content if getattr(b, "type", None) == "text"
-        )
-        return ReviewResult(
-            findings=[],
-            usage=usage_from_anthropic(response.usage),
-            cost_usd=compute_cost(usage_from_anthropic(response.usage), pricing),
-            summary=text or "(no tool call returned)",
-            raw_tool_input=None,
-        )
-
+def _coerce_findings(raw_obj: dict | None) -> tuple[str, list[Finding]]:
+    """Turn a parsed JSON object into (summary, findings)."""
+    if not raw_obj:
+        return "", []
+    summary = str(raw_obj.get("summary") or "")
     findings: list[Finding] = []
-    for raw in tool_input.get("findings", []) or []:
+    for raw in raw_obj.get("findings") or []:
+        if not isinstance(raw, dict):
+            continue
         try:
             findings.append(
                 Finding(
@@ -211,19 +140,54 @@ def review(pr: PullRequest, config: Config) -> ReviewResult:
             )
         except (KeyError, TypeError, ValueError) as exc:
             sys.stderr.write(f"warning: dropped malformed finding ({exc}): {raw!r}\n")
+    return summary, findings
 
-    usage = usage_from_anthropic(response.usage)
+
+def review(pr: PullRequest, config: Config) -> ReviewResult:
+    """Run a single-shot review. Returns structured findings + token usage."""
+    model = config.model_for("generalist")
+
+    result = call(
+        system=SYSTEM_PROMPT,
+        user=_build_user_message(pr),
+        model=model,
+        tools_enabled=False,
+    )
+
+    if result.is_error:
+        return ReviewResult(
+            findings=[],
+            usage=result.usage,
+            cost_usd=result.cost_usd,
+            summary="",
+            raw_response=result.text,
+            resolved_model=result.resolved_model,
+            num_turns=result.num_turns,
+            duration_ms=result.duration_ms,
+            error=result.error,
+        )
+
+    parsed = extract_fenced_json(result.text)
+    summary, findings = _coerce_findings(parsed)
+
     return ReviewResult(
         findings=findings,
-        usage=usage,
-        cost_usd=compute_cost(usage, pricing),
-        summary=str(tool_input.get("summary", "")),
-        raw_tool_input=tool_input,
+        usage=result.usage,
+        cost_usd=result.cost_usd,
+        summary=summary,
+        raw_response=result.text,
+        resolved_model=result.resolved_model,
+        num_turns=result.num_turns,
+        duration_ms=result.duration_ms,
     )
 
 
 def _render_for_cli(result: ReviewResult) -> str:
     lines: list[str] = []
+    if result.error:
+        lines.append(f"ERROR: {result.error}")
+        return "\n".join(lines)
+
     lines.append(result.summary or "(no summary)")
     lines.append("")
     if not result.findings:
@@ -231,7 +195,8 @@ def _render_for_cli(result: ReviewResult) -> str:
     else:
         for i, f in enumerate(result.findings, start=1):
             lines.append(
-                f"[{i}] {f.severity.upper()} {f.category} - {f.file}:{f.line_start}-{f.line_end}"
+                f"[{i}] {f.severity.upper()} {f.category} - "
+                f"{f.file}:{f.line_start}-{f.line_end}"
             )
             lines.append(f"    {f.title}")
             for body_line in f.message.splitlines():
@@ -286,18 +251,23 @@ def main(argv: list[str] | None = None) -> int:
                 "output_tokens": result.usage.output_tokens,
             },
             "cost_usd": result.cost_usd,
+            "resolved_model": result.resolved_model,
+            "num_turns": result.num_turns,
+            "duration_ms": result.duration_ms,
+            "error": result.error,
         }
         print(json.dumps(out, indent=2))
     else:
         print(_render_for_cli(result))
         sys.stderr.write(
-            f"\nTokens: in={result.usage.input_tokens} "
+            f"\nmodel={result.resolved_model} turns={result.num_turns}\n"
+            f"tokens: in={result.usage.input_tokens} "
             f"cache_w={result.usage.cache_creation_input_tokens} "
             f"cache_r={result.usage.cache_read_input_tokens} "
-            f"out={result.usage.output_tokens}  "
-            f"Cost: ${result.cost_usd:.4f}\n"
+            f"out={result.usage.output_tokens}\n"
+            f"cost=${result.cost_usd:.4f}  duration={result.duration_ms}ms\n"
         )
-    return 0
+    return 0 if not result.error else 1
 
 
 if __name__ == "__main__":

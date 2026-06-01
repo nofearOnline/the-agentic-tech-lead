@@ -1,0 +1,313 @@
+{
+  "version": "v1_single_shot",
+  "pr": 1,
+  "trial": 0,
+  "title": "Add coupon discount support to charge endpoint",
+  "elapsed_seconds": 125.74432396888733,
+  "cost_usd": 0.1291883,
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 5971,
+    "output_tokens": 8347
+  },
+  "summary": "This PR introduces coupon-discount support but has several blocking issues: a console.log that dumps the full charge payload (card data, PII) to logs in violation of PCI DSS; a logic bug that always produces a zero discount_amount; and a FixedCouponStrategy that can produce a negative charge amount. Additionally, exceptions from the discount step are silently swallowed, couponCode is extracted from the raw body before schema validation, and the new code has widespread naming/style problems throughout.",
+  "findings": [
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "security",
+      "severity": "must",
+      "title": "Full charge body (card number, CVV, PII) logged to console",
+      "message": "`console.log('DEBUG charge body:', JSON.stringify(theData))` serialises and logs the raw request body, which contains card number, expiry, CVV, and customer PII. This is a PCI DSS violation and must be removed before merge. If request logging is needed, use a structured logger that masks/redacts sensitive fields.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 24,
+      "line_end": 36,
+      "category": "correctness",
+      "severity": "must",
+      "title": "discount_amount is always 0 \u2014 payload.amount is overwritten before the subtraction",
+      "message": "Line 24 sets `payload.amount = finalAmount` (the post-discount value). Line 36 then computes `payload.amount - finalAmount`, which is `finalAmount - finalAmount = 0`. The client will always receive `discount_amount: 0`. Fix: store the original amount before applying the discount, e.g. `const originalAmount = payload.amount;`, then compute `response.discount_amount = originalAmount - finalAmount`.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 27,
+      "line_end": 29,
+      "category": "correctness",
+      "severity": "must",
+      "title": "FixedCouponStrategy can produce a negative charge amount",
+      "message": "`return amount - this.amt` has no lower-bound guard. A $3 charge (300 cents) with FIVEOFF (500 cents) produces -200. A negative amount sent to the payment gateway will either error unpredictably or, worse, credit the card. Fix: `return Math.max(0, amount - this.amt)` and decide the business rule for over-discounting (reject the coupon, charge $0, etc.).",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 22,
+      "line_end": 27,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Discount errors are silently swallowed \u2014 charge proceeds at full price without notification",
+      "message": "The inner `try/catch` catches any exception from `doStuff` and does nothing (`// TODO`). If the coupon lookup throws for any reason the customer is silently charged full price even though they supplied a coupon. Either propagate the error to the caller or\u2014if silent fallback is the intended policy\u2014log it at WARN level and document the decision.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 15,
+      "line_end": 16,
+      "category": "security",
+      "severity": "should",
+      "title": "couponCode is read from raw body before schema validation",
+      "message": "`couponCode` is extracted from the un-validated `req.body` before `chargeSchema.parse()` runs. If `chargeSchema` does not declare `couponCode`, the field is never validated (type, length, character set) and any attacker-controlled string flows directly into `CouponHandlerFactory.build`. Either add `couponCode` to `chargeSchema` and read it from `payload`, or at minimum read it after `parse()`.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 35,
+      "line_end": 37,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Transaction object is mutated and typed as `any`, discarding type safety",
+      "message": "`const response: any = transaction` loses all type information for the transaction. The fields `discount_amount` and `coupon_code` are grafted onto the object at runtime. Define a typed response interface (e.g. `ChargeResponse`) that includes these optional fields, construct a new object rather than mutating the domain object, and remove the `any` cast.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 37,
+      "line_end": 37,
+      "category": "correctness",
+      "severity": "should",
+      "title": "coupon_code is always included in the response, even when no coupon was provided",
+      "message": "When `couponCode` is `undefined` (no coupon supplied), the response still contains `coupon_code: undefined` (serialised as absent or null depending on the serialiser) and `discount_amount: 0`, which is confusing to clients. Omit these fields from the response when no coupon was applied.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 54,
+      "line_end": 65,
+      "category": "standards",
+      "severity": "should",
+      "title": "Function named `doStuff` in a payments service",
+      "message": "`doStuff` is not an acceptable name for a production payments function. Rename to something descriptive, e.g. `applyCouponDiscount(amount, couponCode)`. Similarly, local variables `tmp` and `result2` should be renamed to `strategy` and `discountedAmount` respectively.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 16,
+      "line_end": 16,
+      "category": "standards",
+      "severity": "should",
+      "title": "`var` used instead of `const` in TypeScript",
+      "message": "`var x = ...` (line 16) and `var tmp = ...` (line 58) use `var`, which has function scope and no block-level safety. In a TypeScript codebase these should be `const`. Also, the private field `p` on `PercentageCouponStrategy` and `amt` on `FixedCouponStrategy` should use descriptive names (`percentage`/`rate` and `discountAmount`).",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 34,
+      "line_end": 45,
+      "category": "standards",
+      "severity": "should",
+      "title": "Loose equality `==` used for string comparisons; long if-else chain instead of a map",
+      "message": "All comparisons in `CouponHandlerFactory.build` use `==` instead of `===`. In TypeScript, always prefer strict equality. Additionally, the long if-else chain is hard to maintain; replace it with a plain lookup map: `const COUPONS: Record<string, AbstractCouponStrategy> = { WELCOME10: new PercentageCouponStrategy(0.1), \u2026 }` and return `COUPONS[code] ?? null`.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 60,
+      "line_end": 60,
+      "category": "standards",
+      "severity": "should",
+      "title": "Debug console.log left in production code path",
+      "message": "`console.log('DEBUG: unknown coupon code:', couponCode)` logs unvalidated user input to stdout. Use the application's structured logger at the appropriate level (e.g. `logger.warn`) and remove the `DEBUG:` prefix. Raw `console.log` calls should not exist in service-layer code.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 5,
+      "line_end": 30,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Abstract class adds no value over a TypeScript interface here",
+      "message": "`AbstractCouponStrategy` has a single abstract method and no shared state or concrete behaviour. A TypeScript interface (`interface CouponStrategy { apply(amount: number): number }`) is idiomatic and lighter. The abstract class pattern is worth the overhead only when shared implementation is needed.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 1,
+      "line_end": 65,
+      "category": "test",
+      "severity": "should",
+      "title": "No unit tests for coupon math \u2014 explicitly flagged TODO in the PR",
+      "message": "The PR description marks unit tests for the coupon calculations as a TODO follow-up. Given that this code handles money arithmetic (rounding, fixed discounts, negative-amount edge case), tests must exist before this merges. At minimum: percent discount rounding, fixed discount at-boundary (amount == discount, amount < discount), and unknown code passthrough.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 32,
+      "line_end": 51,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Coupon codes are hardcoded \u2014 requires a deploy to add, change, or expire a coupon",
+      "message": "All supported coupon codes are baked into the source. Adding a new coupon or expiring an old one requires a code change and a full deploy. Consider moving coupons to a config file, environment variable, or database table so they can be managed without a redeploy. At minimum, a code-level comment explaining this limitation would set the right expectations.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 47,
+      "line_end": 49,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Commented-out dead code should be removed",
+      "message": "The `FREESHIP` block is commented out and adds noise. Remove it; version control preserves history if it is ever needed again.",
+      "source": "v1_generalist",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 1,
+    "totals": {
+      "findings": 15,
+      "issues": 15,
+      "true_positives": 13,
+      "false_positives": 2,
+      "false_negatives": 2
+    },
+    "metrics": {
+      "precision": 0.8666666666666667,
+      "recall": 0.8666666666666667,
+      "f1": 0.8666666666666667
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr1-quality-silent-error-swallow",
+        "matched_keyword": "swallow"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr1-quality-any-cast",
+        "matched_keyword": "any"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "doStuff"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-standards-loose-equality",
+        "matched_keyword": "==="
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-quality-debug-log-coupon",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr1-kiss-abstract-class-vs-interface",
+        "matched_keyword": "abstract class"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr1-correctness-float-money",
+        "matched_keyword": "rounding"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr1-quality-dead-code-comment",
+        "matched_keyword": "commented"
+      }
+    ],
+    "unmatched_findings": [
+      6,
+      13
+    ],
+    "unmatched_issue_ids": [
+      "pr1-standards-snake-case-response",
+      "pr1-test-no-tests-added"
+    ],
+    "per_category": {
+      "security": {
+        "total": 1,
+        "found": 1
+      },
+      "quality": {
+        "total": 5,
+        "found": 5
+      },
+      "correctness": {
+        "total": 3,
+        "found": 3
+      },
+      "standards": {
+        "total": 3,
+        "found": 2
+      },
+      "kiss": {
+        "total": 2,
+        "found": 2
+      },
+      "test": {
+        "total": 1,
+        "found": 0
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 4,
+        "found": 4
+      },
+      "should": {
+        "total": 9,
+        "found": 7
+      },
+      "suggestion": {
+        "total": 2,
+        "found": 2
+      }
+    }
+  },
+  "error": null
+}

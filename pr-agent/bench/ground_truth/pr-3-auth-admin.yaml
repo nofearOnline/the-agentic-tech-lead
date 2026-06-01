@@ -463,3 +463,126 @@ issues:
       - response
       - PII
       - email enumeration
+
+  # ---- planted after v1 baseline review ----
+
+  - id: pr3-security-plaintext-password-logged
+    category: security
+    severity: must
+    file: payments-service/src/http/controllers/authController.ts
+    line_range: [8, 18]
+    description: >
+      `register` handler logs the request body via `console.log`, which
+      includes the plaintext password the user just submitted.
+    match_keywords:
+      - plaintext
+      - plain text
+      - password
+      - console.log
+      - log
+      - PII
+
+  - id: pr3-security-password-hash-in-response
+    category: security
+    severity: must
+    file: payments-service/src/http/controllers/authController.ts
+    line_range: [25, 35]
+    description: >
+      `register` response includes `password_hash` (returned from
+      `createUser`). The hash should never leave the server.
+    match_keywords:
+      - password_hash
+      - hash
+      - response
+      - leak
+      - expose
+
+  - id: pr3-security-jwt-no-expiry
+    category: security
+    severity: must
+    file: payments-service/src/auth/jwt.ts
+    line_range: [11, 14]
+    description: >
+      `jwt.sign(payload, SECRET)` has no `expiresIn`. Tokens issued today
+      remain valid forever; revocation is impossible without rotating
+      `JWT_SECRET`.
+    match_keywords:
+      - expiry
+      - expiresIn
+      - expiration
+      - exp claim
+      - revoke
+      - forever
+      - never expires
+
+  - id: pr3-security-user-enumeration
+    category: security
+    severity: should
+    file: payments-service/src/http/controllers/authController.ts
+    line_range: [44, 56]
+    description: >
+      `login` returns 404 "no user with that email" vs. 401 "wrong
+      password". An attacker can enumerate valid emails by inspecting
+      status codes. Use a uniform 401 for both branches.
+    match_keywords:
+      - enumeration
+      - enumerate
+      - 404
+      - 401
+      - uniform
+      - timing
+      - email exists
+
+  - id: pr3-correctness-fakedb-delete-no-where
+    category: correctness
+    severity: must
+    file: payments-service/src/auth/userStore.ts
+    line_range: [44, 51]
+    description: >
+      `FakeDb.query` DELETE branch ignores any WHERE clause and wipes
+      `this.users = []` unconditionally. The first DELETE through the
+      "raw query" surface destroys every user.
+    match_keywords:
+      - DELETE
+      - WHERE
+      - wipes
+      - destroys
+      - data loss
+      - all users
+
+  - id: pr3-security-webhook-no-url-validation
+    category: security
+    severity: should
+    file: payments-service/src/http/controllers/webhooksController.ts
+    line_range: [10, 16]
+    description: >
+      Webhook registration accepts any string as `url` - no protocol
+      check, no host validation, no length cap. Combined with the SSRF
+      in the fire path this lets an attacker register e.g.
+      `file:///etc/passwd` or `http://169.254.169.254/...`.
+    match_keywords:
+      - URL validation
+      - protocol
+      - http
+      - https
+      - SSRF
+      - validate
+      - allowlist
+
+  - id: pr3-perf-admin-no-pagination
+    category: performance
+    severity: should
+    file: payments-service/src/services/adminService.ts
+    line_range: [8, 60]
+    description: >
+      `listUsers`, `listAllTransactions`, and `exportTransactionsCsv` all
+      load every row into memory unconditionally. No `limit`, no offset,
+      no streaming. Unbounded memory growth in production.
+    match_keywords:
+      - pagination
+      - paginate
+      - limit
+      - offset
+      - streaming
+      - unbounded
+      - memory

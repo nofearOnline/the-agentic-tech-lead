@@ -159,23 +159,34 @@ issues:
       - tmp
       - result2
 
-  - id: pr1-standards-var-and-loose-equality
+  - id: pr1-standards-var-instead-of-const
     category: standards
     severity: should
     file: payments-service/src/services/couponDiscount.ts
     line_range: [14, 60]
     description: >
-      `var` (instead of `let`/`const`) and `==` (instead of `===`) appear
-      throughout. The surrounding codebase uses `const`/`let` and `===`
-      consistently.
+      `var` (instead of `let`/`const`) at lines 14 and ~57. The surrounding
+      codebase uses `const`/`let` consistently.
     match_keywords:
       - var
+      - let
+      - const
+      - function scope
+
+  - id: pr1-standards-loose-equality
+    category: standards
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [32, 58]
+    description: >
+      `==` instead of `===` throughout the coupon code dispatcher and the
+      null-check in `doStuff`. TypeScript projects typically enforce `eqeqeq`.
+    match_keywords:
       - "==="
       - "=="
       - loose equality
       - strict equality
-      - let
-      - const
+      - eqeqeq
 
   - id: pr1-quality-dead-code-comment
     category: quality
@@ -205,3 +216,53 @@ issues:
       - coverage
       - untested
       - unit test
+
+  # ---- planted after v1 baseline review (these are real issues v1 caught) ----
+
+  - id: pr1-quality-any-cast
+    category: quality
+    severity: should
+    file: payments-service/src/http/controllers/paymentsController.ts
+    line_range: [35, 38]
+    description: >
+      `const response: any = transaction` discards TypeScript's type safety
+      to mutate the transaction object with snake_case fields. Define an
+      explicit response interface and use a spread or object literal.
+    match_keywords:
+      - any
+      - "as any"
+      - type safety
+      - type-cast
+      - typescript
+      - interface
+
+  - id: pr1-kiss-abstract-class-vs-interface
+    category: kiss
+    severity: suggestion
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [5, 8]
+    description: >
+      `AbstractCouponStrategy` is an abstract class with one abstract
+      method and no concrete behavior. In TypeScript that is exactly what
+      `interface` is for. Drop the inheritance.
+    match_keywords:
+      - abstract class
+      - interface
+      - extends
+      - implements
+
+  - id: pr1-quality-debug-log-coupon
+    category: quality
+    severity: should
+    file: payments-service/src/services/couponDiscount.ts
+    line_range: [58, 62]
+    description: >
+      `console.log('DEBUG: unknown coupon code:', couponCode)` is a
+      production-path debug log: writes attacker-controlled input to
+      stdout, bypasses the pino logger, and shouldn't be in the diff.
+    match_keywords:
+      - console.log
+      - DEBUG
+      - debug log
+      - log injection
+      - pino

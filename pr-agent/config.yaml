@@ -10,14 +10,16 @@ repo:
   name: the-agentic-tech-lead
 
 models:
-  # Logical role -> Anthropic model id. Pin to dated snapshots in CI;
-  # alias names are fine for local development.
-  generalist: claude-sonnet-4-5             # v1, v2 reviewer
-  scout: claude-sonnet-4-5                  # v4 scout (agentic loop)
-  specialist_reasoning: claude-sonnet-4-5   # v3/v4 specialists needing judgment (architecture, safety)
-  specialist_narrow: claude-haiku-4-5       # v3/v4 specialists for narrow lenses (conventions, tests, design system)
-  tier1: claude-haiku-4-5                   # v5 Tier 1 mechanical findings
-  skeptic: claude-sonnet-4-5                # v4 final filter pass
+  # Logical role -> model alias. The `claude` CLI resolves short aliases
+  # ("haiku", "sonnet", "opus") to the current dated snapshot at call
+  # time and reports the resolved ID in the response envelope. For SDK
+  # use later, swap to dated snapshots like "claude-sonnet-4-5-20250929".
+  generalist: sonnet              # v1, v2 reviewer
+  scout: sonnet                   # v4 scout (agentic loop)
+  specialist_reasoning: sonnet    # v3/v4 specialists needing judgment (architecture, safety)
+  specialist_narrow: haiku        # v3/v4 specialists for narrow lenses (conventions, tests, design system)
+  tier1: haiku                    # v5 Tier 1 mechanical findings
+  skeptic: opus                   # v4/v5 final filter pass (blog: "let the smartest agent prune")
 
 eval:
   trials_per_pr: 3
@@ -28,16 +30,23 @@ eval:
     - 2
     - 3
 
-# USD per 1M tokens. Update when Anthropic changes prices.
-# Sources of truth: https://www.anthropic.com/pricing
+# USD per 1M tokens. Only used by the SDK backend (when an API key is
+# present). The `claude` CLI backend reports total_cost_usd per call
+# directly, so this table is ignored for that path.
+# Source of truth: https://www.anthropic.com/pricing
 pricing:
-  claude-sonnet-4-5:
+  sonnet:
     input: 3.00
     input_cache_write: 3.75
     input_cache_read: 0.30
     output: 15.00
-  claude-haiku-4-5:
+  haiku:
     input: 1.00
     input_cache_write: 1.25
     input_cache_read: 0.10
     output: 5.00
+  opus:
+    input: 15.00
+    input_cache_write: 18.75
+    input_cache_read: 1.50
+    output: 75.00

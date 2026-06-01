@@ -236,3 +236,23 @@ issues:
       - naming
       - inconsistent
       - convention
+
+  # ---- planted after v1 baseline review ----
+
+  - id: pr2-security-customer-id-logged
+    category: security
+    severity: should
+    file: payments-service/src/http/controllers/customerHistoryController.ts
+    line_range: [14, 16]
+    description: >
+      `console.log('history requested for customer ' + customerId)` writes
+      customer identifiers (PII) to stdout / log aggregator and bypasses
+      the pino logger that already redacts.
+    match_keywords:
+      - console.log
+      - customer
+      - customerId
+      - PII
+      - leak
+      - log
+      - pino
