@@ -61,6 +61,8 @@ def call(
     max_turns: int | None = None,
     timeout_seconds: int = 600,
     extra_args: Iterable[str] | None = None,
+    add_dirs: Iterable[str] | None = None,
+    cwd: str | None = None,
 ) -> CallResult:
     """Run a single non-interactive Claude call.
 
@@ -81,6 +83,12 @@ def call(
         timeout_seconds: Subprocess timeout. PR3 on Opus can take ~2 min;
             default 10 min leaves a wide safety margin.
         extra_args: Anything else to pass to `claude`. Use sparingly.
+        add_dirs: Extra directories the agent is allowed to Read/Grep within,
+            passed as `--add-dir <dir>` (repeatable). Used by repo-aware
+            versions (v2+) to expose a worktree checked out at the PR head.
+        cwd: Working directory for the `claude` subprocess. When set, the
+            agent's relative paths resolve against this directory (e.g. a
+            git worktree root). Defaults to the caller's cwd.
 
     Returns:
         CallResult. Even on a non-zero exit we return a populated result
@@ -123,6 +131,9 @@ def call(
             "WebSearch",
             "Write",
         ]
+    if add_dirs:
+        for d in add_dirs:
+            cmd += ["--add-dir", d]
     if extra_args:
         cmd += list(extra_args)
 
@@ -135,6 +146,7 @@ def call(
             text=True,
             input=user,                 # user message on stdin
             timeout=timeout_seconds,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired:
         return CallResult(

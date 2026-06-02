@@ -1,0 +1,258 @@
+{
+  "version": "v2_repo_aware",
+  "pr": 1,
+  "trial": 0,
+  "title": "Add coupon discount support to charge endpoint",
+  "elapsed_seconds": 178.45894503593445,
+  "cost_usd": 0.2952777,
+  "usage": {
+    "input_tokens": 11,
+    "cache_creation_input_tokens": 26852,
+    "cache_read_input_tokens": 167859,
+    "output_tokens": 9465
+  },
+  "summary": "This PR adds coupon-discount support to the charge endpoint but has several blocking defects that prevent it from merging safely. The most critical issue is a PCI/PII data-loss: a raw `console.log` prints the full request body\u2014including card number and CVC\u2014to stdout, completely bypassing the Pino logger's redaction configuration. On top of that, the core feature is silently broken: `payload.amount` is mutated to equal `finalAmount` before the subtraction, so `discount_amount` is always 0. A negative-amount footgun in `FixedCouponStrategy` and a catch-all silent swallow round out the must-fix list. There are also consistent standards violations (snake_case fields in a camelCase API, `console.log` where pino should be used, `any` cast, `var`, `==`) and no tests for any of the new logic.",
+  "findings": [
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 16,
+      "line_end": 16,
+      "category": "security",
+      "severity": "must",
+      "title": "console.log dumps raw card number and CVC to stdout",
+      "message": "`console.log('DEBUG charge body:', JSON.stringify(theData))` serialises the entire request body and writes it to stdout before Zod validation strips anything. The project already uses `pino` with explicit `redact` paths for `card.number` and `card.cvc` (see `src/logger.ts` lines 9-17) specifically to prevent PCI data from appearing in logs. This line bypasses that protection entirely. Remove the debug log; if you need request-level logging, rely on the `pinoHttp` middleware already wired in `src/app.ts` or call `logger.debug` with a hand-picked, field-safe object.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 23,
+      "line_end": 35,
+      "category": "correctness",
+      "severity": "must",
+      "title": "discount_amount is always 0 \u2014 payload.amount mutated before subtraction",
+      "message": "Line 23 writes `payload.amount = finalAmount`, so by the time line 35 evaluates `payload.amount - finalAmount` the two operands are identical and the result is always `0`. The discount is correctly applied to the gateway charge but is never reflected in the response. Fix: capture the original amount before the coupon is applied\u2014e.g. `const originalAmount = payload.amount;`\u2014and use that in the subtraction: `response.discountAmount = originalAmount - finalAmount;`.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 21,
+      "line_end": 26,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Silent catch swallows all coupon errors, masking failures",
+      "message": "The inner `try/catch` with `// TODO` in the body silently discards any exception thrown during coupon processing. If coupon logic ever throws (e.g., due to a future validation guard), the error disappears, the charge proceeds at full price with no indication to the caller, and nothing appears in the logs. Either remove the inner try/catch and let errors propagate normally, or explicitly handle the error (log it via `logger.warn`, return a 400, etc.).",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 24,
+      "line_end": 29,
+      "category": "correctness",
+      "severity": "must",
+      "title": "FixedCouponStrategy can return a negative amount, causing an unhandled 500",
+      "message": "`return amount - this.amt` has no floor guard. When the discount exceeds the charge (e.g., TENOFF\u20141000 cents\u2014applied to a $3.00 charge of 300 cents), `apply()` returns `-700`. That negative number is then passed to `paymentsService.charge()`, which calls `assertPositiveAmount()` (`src/domain/money.ts` line 14-18). `assertPositiveAmount` throws a plain `Error`, not an `AppError`, which the `errorHandler` maps to an opaque 500. The caller gets no actionable error. Fix: add `return Math.max(0, amount - this.amt)` or throw a domain-level `AppError` with a 400 before the charge is attempted.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 34,
+      "line_end": 36,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Casting transaction to `any` and mutating it in-place corrupts the stored domain object",
+      "message": "`const response: any = transaction` is a reference copy, not a clone. Assigning `response.discount_amount` and `response.coupon_code` therefore mutates the same object that was already handed to `transactionRepository.save()`. In `InMemoryTransactionRepository`, `save()` stores the reference directly (line 12 of `transactionRepository.ts`), so the stored transaction now carries response-layer fields. A subsequent `GET /transactions/:id` will return those fields too, leaking presentation concerns into the domain model. Fix: build a separate response DTO\u2014`res.status(201).json({ ...transaction, discountAmount: ..., couponCode: ... })`\u2014instead of mutating the transaction.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 35,
+      "line_end": 36,
+      "category": "standards",
+      "severity": "should",
+      "title": "New response fields use snake_case; rest of the API uses camelCase",
+      "message": "The `Transaction` type (`src/domain/transaction.ts`) uses camelCase for all fields: `cardLast4`, `customerId`, `gatewayReference`, `createdAt`. The new fields `discount_amount` and `coupon_code` break this convention. Rename to `discountAmount` and `couponCode` to match the existing API contract.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 14,
+      "line_end": 15,
+      "category": "correctness",
+      "severity": "should",
+      "title": "couponCode is read before schema validation and never validated",
+      "message": "`couponCode` is extracted from the raw body before `chargeSchema.parse()` and is never declared in `chargeSchema`. This means any arbitrary string (including very long ones) is accepted silently; unknown codes are just ignored with no feedback to the caller (`doStuff` returns the original amount). Add `couponCode: z.string().max(32).optional()` to `chargeSchema`, read it from the parsed `payload`, and consider returning a 400 for unrecognised codes rather than silently ignoring them.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 59,
+      "line_end": 61,
+      "category": "standards",
+      "severity": "should",
+      "title": "console.log used instead of the project's pino logger",
+      "message": "The project has a structured `pino` logger exported from `src/logger.ts` and used everywhere else (controllers, services, error handler). Replace `console.log('DEBUG: unknown coupon code:', couponCode)` with `logger.warn({ couponCode }, 'unknown_coupon_code')` to keep log output structured, level-controlled, and silenced during tests (the logger is configured `silent` in the test environment).",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 54,
+      "line_end": 65,
+      "category": "standards",
+      "severity": "should",
+      "title": "Poor naming, var declarations, and loose equality throughout new file",
+      "message": "Several naming and style issues contradict TypeScript/project conventions: (1) `doStuff` is not a meaningful name\u2014rename to `applyCoupon`. (2) Variables `tmp`, `result2`, `x` and constructor params `p`, `amt` are opaque\u2014use `strategy`, `discountedAmount`, `discounted`, `percentage`, `fixedAmount`. (3) `var x` and `var tmp` should be `const`. (4) `code == 'WELCOME10'` and `tmp == null` should use strict `===`. None of these are blocking individually but collectively they make the code harder to maintain.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 1,
+      "line_end": 65,
+      "category": "test",
+      "severity": "should",
+      "title": "No tests for coupon math or the controller integration",
+      "message": "The test plan explicitly marks unit tests for coupon math as a TODO. The new `FixedCouponStrategy` negative-amount edge case, the `PercentageCouponStrategy` floor rounding, and the controller's discount-amount calculation all need coverage. The existing `chargeRoute.test.ts` also does not assert that a `couponCode` request produces the correct `discountAmount`\u2014meaning the broken `discount_amount: 0` bug would not be caught by `npm test`. Tests should be part of this PR, not deferred.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 47,
+      "line_end": 50,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Commented-out dead code should be removed",
+      "message": "The commented-out FREESHIP block (`// else if (code == 'FREESHIP')...`) should be removed. If it is needed in the future, it can be recovered from git history. Leaving it creates noise and false expectations.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 1,
+    "totals": {
+      "findings": 11,
+      "issues": 15,
+      "true_positives": 11,
+      "false_positives": 0,
+      "false_negatives": 4
+    },
+    "metrics": {
+      "precision": 1.0,
+      "recall": 0.7333333333333333,
+      "f1": 0.846153846153846
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-quality-silent-error-swallow",
+        "matched_keyword": "swallow"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr1-quality-any-cast",
+        "matched_keyword": "any"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr1-standards-snake-case-response",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr1-test-no-tests-added",
+        "matched_keyword": "test"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "doStuff"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-correctness-float-money",
+        "matched_keyword": "rounding"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-standards-loose-equality",
+        "matched_keyword": "=="
+      }
+    ],
+    "unmatched_findings": [],
+    "unmatched_issue_ids": [
+      "pr1-standards-var-instead-of-const",
+      "pr1-quality-dead-code-comment",
+      "pr1-kiss-abstract-class-vs-interface",
+      "pr1-quality-debug-log-coupon"
+    ],
+    "per_category": {
+      "security": {
+        "total": 1,
+        "found": 1
+      },
+      "quality": {
+        "total": 5,
+        "found": 3
+      },
+      "correctness": {
+        "total": 3,
+        "found": 3
+      },
+      "standards": {
+        "total": 3,
+        "found": 2
+      },
+      "kiss": {
+        "total": 2,
+        "found": 1
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 4,
+        "found": 4
+      },
+      "should": {
+        "total": 9,
+        "found": 7
+      },
+      "suggestion": {
+        "total": 2,
+        "found": 0
+      }
+    }
+  },
+  "error": null
+}
