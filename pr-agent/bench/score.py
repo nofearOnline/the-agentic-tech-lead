@@ -135,6 +135,8 @@ class ScoreResult:
     recall: float
     f1: float
     matches: list[MatchEdge] = field(default_factory=list)
+    covered_issue_ids: list[str] = field(default_factory=list)   # deduped issues with >=1 matching finding
+    matched_finding_count: int = 0                               # findings that matched >=1 issue
     unmatched_findings: list[int] = field(default_factory=list)
     unmatched_issue_ids: list[str] = field(default_factory=list)
     per_category: dict[str, dict[str, int]] = field(default_factory=dict)
@@ -146,7 +148,8 @@ class ScoreResult:
             "totals": {
                 "findings": self.total_findings,
                 "issues": self.total_issues,
-                "true_positives": self.true_positives,
+                "true_positives": self.true_positives,        # issues covered (recall numerator)
+                "matched_findings": self.matched_finding_count,  # findings that hit something (precision numerator)
                 "false_positives": self.false_positives,
                 "false_negatives": self.false_negatives,
             },
@@ -163,6 +166,7 @@ class ScoreResult:
                 }
                 for m in self.matches
             ],
+            "covered_issue_ids": self.covered_issue_ids,
             "unmatched_findings": self.unmatched_findings,
             "unmatched_issue_ids": self.unmatched_issue_ids,
             "per_category": self.per_category,
@@ -171,11 +175,29 @@ class ScoreResult:
 
 
 def score(findings: list[dict[str, Any]], gt: GroundTruth) -> ScoreResult:
-    """Greedy match findings against ground-truth issues."""
+    """Match findings against ground-truth issues (many-to-one).
 
-    claimed_issue_ids: set[str] = set()
+    A finding may cover EVERY issue it localizes to (same file, overlapping
+    line range, and a keyword hit), and an issue is "covered" if ANY finding
+    matches it. This decouples recall from how granularly a version chooses
+    to report: a reviewer that folds three nits into one comment is not
+    penalized, and a reviewer that splits one issue into three findings is
+    not rewarded.
+
+    - recall    = covered issues / total issues
+    - precision = findings that matched >=1 issue / total findings
+    - a "false positive" is a finding that localizes to no planted issue
+      (review these manually -- it may be a real issue we never planted)
+    - a "false negative" is a planted issue no finding localized to
+
+    The per-issue keyword + line-range gate still applies, so a vague
+    "this PR has problems" finding cannot vacuum up credit for issues it
+    does not actually point at.
+    """
+
     matches: list[MatchEdge] = []
     matched_finding_indices: set[int] = set()
+    covered_issue_ids: set[str] = set()
 
     for fi, f in enumerate(findings):
         f_file = _normalize_path(str(f.get("file", "")))
@@ -187,8 +209,6 @@ def score(findings: list[dict[str, Any]], gt: GroundTruth) -> ScoreResult:
         f_text = _finding_text(f)
 
         for issue in gt.issues:
-            if issue.id in claimed_issue_ids:
-                continue
             if _normalize_path(issue.file) != f_file:
                 continue
             if not _ranges_overlap(
@@ -199,43 +219,49 @@ def score(findings: list[dict[str, Any]], gt: GroundTruth) -> ScoreResult:
             if kw is None:
                 continue
 
+            # many-to-one: this finding covers this issue; keep scanning so
+            # the same finding can also cover other issues it localizes to.
             matches.append(MatchEdge(finding_index=fi, issue_id=issue.id, matched_keyword=kw))
-            claimed_issue_ids.add(issue.id)
             matched_finding_indices.add(fi)
-            break
+            covered_issue_ids.add(issue.id)
 
-    tp = len(matches)
-    fp = len(findings) - tp
-    fn = len(gt.issues) - tp
+    covered = len(covered_issue_ids)
+    matched_findings = len(matched_finding_indices)
+    fp = len(findings) - matched_findings
+    fn = len(gt.issues) - covered
 
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    precision = matched_findings / len(findings) if findings else 0.0
+    recall = covered / len(gt.issues) if gt.issues else 0.0
     f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
 
     per_category: dict[str, dict[str, int]] = {}
     per_severity: dict[str, dict[str, int]] = {}
-    matched_ids = {m.issue_id for m in matches}
     for issue in gt.issues:
         for bucket, key in (("per_category", issue.category), ("per_severity", issue.severity)):
             target = per_category if bucket == "per_category" else per_severity
             slot = target.setdefault(key, {"total": 0, "found": 0})
             slot["total"] += 1
-            if issue.id in matched_ids:
+            if issue.id in covered_issue_ids:
                 slot["found"] += 1
+
+    # preserve YAML order for readable output
+    ordered_covered = [i.id for i in gt.issues if i.id in covered_issue_ids]
 
     return ScoreResult(
         pr=gt.pr,
         total_findings=len(findings),
         total_issues=len(gt.issues),
-        true_positives=tp,
+        true_positives=covered,
         false_positives=fp,
         false_negatives=fn,
         precision=precision,
         recall=recall,
         f1=f1,
         matches=matches,
+        covered_issue_ids=ordered_covered,
+        matched_finding_count=matched_findings,
         unmatched_findings=[i for i in range(len(findings)) if i not in matched_finding_indices],
-        unmatched_issue_ids=[i.id for i in gt.issues if i.id not in matched_ids],
+        unmatched_issue_ids=[i.id for i in gt.issues if i.id not in covered_issue_ids],
         per_category=per_category,
         per_severity=per_severity,
     )

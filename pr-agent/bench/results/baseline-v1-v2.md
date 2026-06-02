@@ -5,26 +5,27 @@
 | v1_single_shot | #1 | 1 | $0.1292 | 125.7s | 15.0 | 14.0/15 | 1.00 | 0.93 | 0.97 +/- 0.00 |
 | v1_single_shot | #2 | 1 | $0.1496 | 126.9s | 12.0 | 13.0/14 | 1.00 | 0.93 | 0.96 +/- 0.00 |
 | v1_single_shot | #3 | 1 | $0.2193 | 169.6s | 28.0 | 27.0/33 | 0.93 | 0.82 | 0.87 +/- 0.00 |
+| v2_repo_aware | #1 | 1 | $0.2953 | 178.5s | 11.0 | 14.0/15 | 1.00 | 0.93 | 0.97 +/- 0.00 |
 
 ### PR #1 - issue hit rate (per version, X/trials)
 
-| issue id | severity | category | v1_single_shot |
-| --- | --- | --- | --- |
-| pr1-security-card-pan-logged | must | security | 1/1 |
-| pr1-quality-silent-error-swallow | must | quality | 1/1 |
-| pr1-correctness-discount-always-zero | must | correctness | 1/1 |
-| pr1-standards-snake-case-response | should | standards | 0/1 |
-| pr1-correctness-coupon-not-validated | should | correctness | 1/1 |
-| pr1-kiss-strategy-factory-overengineered | should | kiss | 1/1 |
-| pr1-correctness-float-money | must | correctness | 1/1 |
-| pr1-quality-bad-naming | should | quality | 1/1 |
-| pr1-standards-var-instead-of-const | should | standards | 1/1 |
-| pr1-standards-loose-equality | should | standards | 1/1 |
-| pr1-quality-dead-code-comment | suggestion | quality | 1/1 |
-| pr1-test-no-tests-added | should | test | 1/1 |
-| pr1-quality-any-cast | should | quality | 1/1 |
-| pr1-kiss-abstract-class-vs-interface | suggestion | kiss | 1/1 |
-| pr1-quality-debug-log-coupon | should | quality | 1/1 |
+| issue id | severity | category | v1_single_shot | v2_repo_aware |
+| --- | --- | --- | --- | --- |
+| pr1-security-card-pan-logged | must | security | 1/1 | 1/1 |
+| pr1-quality-silent-error-swallow | must | quality | 1/1 | 1/1 |
+| pr1-correctness-discount-always-zero | must | correctness | 1/1 | 1/1 |
+| pr1-standards-snake-case-response | should | standards | 0/1 | 1/1 |
+| pr1-correctness-coupon-not-validated | should | correctness | 1/1 | 1/1 |
+| pr1-kiss-strategy-factory-overengineered | should | kiss | 1/1 | 1/1 |
+| pr1-correctness-float-money | must | correctness | 1/1 | 1/1 |
+| pr1-quality-bad-naming | should | quality | 1/1 | 1/1 |
+| pr1-standards-var-instead-of-const | should | standards | 1/1 | 1/1 |
+| pr1-standards-loose-equality | should | standards | 1/1 | 1/1 |
+| pr1-quality-dead-code-comment | suggestion | quality | 1/1 | 1/1 |
+| pr1-test-no-tests-added | should | test | 1/1 | 1/1 |
+| pr1-quality-any-cast | should | quality | 1/1 | 1/1 |
+| pr1-kiss-abstract-class-vs-interface | suggestion | kiss | 1/1 | 0/1 |
+| pr1-quality-debug-log-coupon | should | quality | 1/1 | 1/1 |
 
 ### PR #2 - issue hit rate (per version, X/trials)
 
@@ -83,4 +84,4 @@
 | pr3-security-webhook-no-url-validation | should | security | 1/1 |
 | pr3-perf-admin-no-pagination | should | performance | 1/1 |
 
-Total API cost across 3 successful trials: $0.4981
+Total API cost across 4 successful trials: $0.7934

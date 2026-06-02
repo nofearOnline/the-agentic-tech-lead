@@ -95,10 +95,15 @@ def aggregate(results_dir: Path, version: str, pr: int) -> Aggregate | None:
     issues_total = 0
     for t in successful:
         s = t.get("score") or {}
-        matches = s.get("matches") or []
         issues_total = max(issues_total, int((s.get("totals") or {}).get("issues", 0)))
-        for m in matches:
-            issue_hit_count[m["issue_id"]] += 1
+        # Use the deduped covered_issue_ids (one count per issue per trial).
+        # Falls back to deriving a deduped set from `matches` for older
+        # result files written before covered_issue_ids existed.
+        covered = s.get("covered_issue_ids")
+        if covered is None:
+            covered = {m["issue_id"] for m in (s.get("matches") or [])}
+        for issue_id in set(covered):
+            issue_hit_count[issue_id] += 1
 
     category_coverage_acc: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for t in successful:
