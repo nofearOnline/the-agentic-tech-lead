@@ -1,0 +1,351 @@
+{
+  "version": "v2_repo_aware",
+  "pr": 2,
+  "trial": 2,
+  "title": "Add refunds endpoint and customer transaction history",
+  "elapsed_seconds": 778.4576692581177,
+  "cost_usd": 0.28813035,
+  "usage": {
+    "input_tokens": 14,
+    "cache_creation_input_tokens": 15583,
+    "cache_read_input_tokens": 273487,
+    "output_tokens": 9508
+  },
+  "summary": "This PR ships two new endpoints but has several blocking issues: (1) a module-level `refundsStore` singleton breaks test isolation and cannot be cleared between test runs; (2) the sort comparator sorts on the non-existent field `created_at` instead of the domain field `createdAt`, silently breaking the \"newest-first\" guarantee; (3) the history response includes a `card_number` field constructed via a suspicious `unknown` cast that tries to surface a full PAN \u2013 a clear security red flag; (4) there is no cumulative refund check, so a transaction can be refunded multiple times; (5) a \"dollar-to-cents\" heuristic in the refund amount guard silently produces wrong refund amounts. Beyond those blockers there are a cluster of should-fix issues: `console.log` bypassing the structured pino logger (which carries field-level redaction), a 200 response for a not-found transaction instead of a 404, the DI wiring in `createApp` being broken when `deps.payments` is injected, inconsistent camelCase/snake_case across the API surface, and tests so weak they would pass even if the feature were completely non-functional.",
+  "findings": [
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Module-level refundsStore shared across all instances and test runs",
+      "message": "`refundsStore` is declared at module scope (`const refundsStore: Record<string, RefundResult> = {}`), so every `RefundsService` instance writes into the same object for the lifetime of the Node.js process. This makes test runs non-deterministic: refunds created in one test bleed into every subsequent test in the same Jest worker. The store also cannot be reset between integration-test cases that each call `createApp()`. Fix: move the store inside the class as a private instance field (`private readonly store: Record<string, RefundResult> = {}`) so each service instance is fully isolated.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 28,
+      "line_end": 32,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Sort comparator reads `created_at` but Transaction domain field is `createdAt`",
+      "message": "The comparator accesses `a.created_at` and `b.created_at`, but the `Transaction` interface (domain/transaction.ts line 13) defines the field as `createdAt` (camelCase). Both values will always be `undefined`, making the sort a no-op \u2014 the \"newest-first\" ordering guarantee is silently broken for every response. Fix: change the comparator to use `a.createdAt` and `b.createdAt`, and remove the `any` casts so the compiler catches this class of mistake next time.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 43,
+      "line_end": 43,
+      "category": "security",
+      "severity": "must",
+      "title": "Response includes `card_number` field that attempts to surface a full PAN",
+      "message": "Line 43 casts the transaction through `unknown` to access a `card_number` property and emits it as `card_number` in the JSON response. The `Transaction` type does not store the full card number (only `cardLast4`), so today the fallback to `tx.cardLast4` fires every time \u2014 but this code is clearly written in anticipation of (or in response to) a domain object that carries the full PAN. If `card_number` is ever added to `Transaction`, this will silently start leaking full PANs to every consumer of the history endpoint. The response also now has two card fields (`card_number` and `card_last4`) where only one is meaningful. Fix: remove the `card_number` field entirely; `card_last4` is sufficient and safe.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 36,
+      "line_end": 44,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Dollar-to-cents heuristic silently produces wrong refund amounts",
+      "message": "When `refundAmount > tx.amount`, the code guesses whether the caller sent dollars by multiplying by 100 and checking again. This produces silent wrong results: e.g. a `tx.amount = 5000` (50 USD in cents) with `refundAmount = 100` (1 USD in dollars) passes the first guard (100 < 5000) and is stored as a 100-cent refund instead of the intended 5000 cents. The entire branch is a symptom of an underspecified API contract. Fix: remove the heuristic, define the unit in the schema docs, and return a 400 validation error if the requested amount exceeds the transaction amount.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 22,
+      "line_end": 57,
+      "category": "correctness",
+      "severity": "must",
+      "title": "No cumulative refund check \u2014 same transaction can be over-refunded",
+      "message": "The refund amount guard (`refundAmount > tx.amount`) compares only the *current* refund request against the original charge. It does not account for refunds that have already been issued. A caller can POST `/refunds` twice for the same transaction and receive twice the original amount back. Fix: before creating the refund, sum `listRefundsForTransaction(transactionId)` and reject if `existing_total + refundAmount > tx.amount`.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/app.ts",
+      "line_start": 22,
+      "line_end": 24,
+      "category": "correctness",
+      "severity": "must",
+      "title": "DI wiring broken when `deps.payments` is injected \u2014 refunds see a different repo",
+      "message": "A new `transactionRepo` is always created on line 22, and it is always passed to `RefundsService` and `CustomerHistoryController`. If a caller supplies `deps.payments` (a `PaymentsService` that was constructed with its own repository), transactions charged through that service are invisible to the refunds and history controllers because they use the freshly-allocated, empty repo. Fix: either (a) expand `AppDeps` to allow injecting the repo directly and share it, or (b) thread the repo through `AppDeps` so the injected `PaymentsService` and the new services all operate on the same store.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 25,
+      "line_end": 55,
+      "category": "security",
+      "severity": "should",
+      "title": "`console.log` bypasses the structured pino logger and its PII redaction",
+      "message": "The codebase uses a purpose-built pino logger (`src/logger.ts`) configured with field-level redaction for `card.number`, `card.cvc`, and related paths. Three `console.log` calls in `refundsService.ts` (lines 25 and 55) and one in `customerHistoryController.ts` (line 15) bypass this entirely \u2014 no request IDs, no log-level gating in tests, and no redaction. If sensitive data (e.g. a transaction ID that correlates to a card) is ever included in a log message, it will appear in plain text. Replace all three with `logger.info(...)` / `logger.warn(...)` using structured object arguments rather than string concatenation.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 18,
+      "line_end": 22,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Returns 200 with empty body when transaction is not found \u2014 should be 404",
+      "message": "When `this.refunds.refund()` returns `null` (transaction not found), the controller responds with `200 OK` and `{}`. Callers cannot distinguish a successful refund from a silent no-op. The `notFound()` error factory already exists in `src/errors.ts` for exactly this purpose. Fix: `if (result == null) { next(notFound('Transaction not found')); return; }` \u2014 the error handler will produce the correct 404 response.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 38,
+      "line_end": 50,
+      "category": "standards",
+      "severity": "should",
+      "title": "History response uses snake_case while the rest of the API uses camelCase",
+      "message": "The existing `/charge` and `/transactions/:id` endpoints return the `Transaction` object verbatim in camelCase (`cardLast4`, `customerId`, `createdAt`, `gatewayReference`). The new history response explicitly remaps every field to snake_case (`card_last4`, `customer_id`, `created_at`, `gateway_reference`). The refund response in `refundsController.ts` also uses snake_case (`refund_id`, `transaction_id`). This inconsistency will force API consumers to handle two different field-naming conventions. Choose one convention (camelCase matches existing contracts) and apply it consistently.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 4,
+      "line_end": 6,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Refund `amount` accepts zero and negative values",
+      "message": "`amount: z.number().optional()` allows callers to submit `0` or `-500`. The chargeSchema pattern uses `z.number().int().positive()` for the same semantic field. A zero-amount refund would pass validation and create a `RefundResult` with `amount: 0`, silently wasting an idempotency slot. Fix: `z.number().int().positive().optional()`.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 5,
+      "line_end": 38,
+      "category": "test",
+      "severity": "should",
+      "title": "Tests have no meaningful assertions \u2014 they would pass for a completely broken implementation",
+      "message": "All three tests assert only that a value is defined or that the status code is below 500. They do not check: (1) that `POST /refunds` returns 201 with a `refund_id` and correct `amount`; (2) that a missing transaction returns 404 (not 200); (3) that `GET /customers/:id/transactions` returns 200, the correct `customer_id`, and a well-formed `transactions` array. The existing `chargeRoute.test.ts` shows the expected pattern (status codes, `toMatchObject`, field-level assertions). The new tests should follow the same standard.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "standards",
+      "severity": "should",
+      "title": "Loose equality `==` used for string comparison",
+      "message": "`tx.customerId == customerId` should be `tx.customerId === customerId`. `customerId` is always a `string` (from `req.params`) and `tx.customerId` is `string | undefined`; loose equality offers no benefit here and silently suppresses type-checker feedback.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 9,
+      "line_end": 11,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "`historyQuerySchema` is dead code \u2014 declared but never imported or used",
+      "message": "`historyQuerySchema` is exported but never imported anywhere in the codebase. The history controller reads `req.params.id` directly without using it. Either wire it up to validate the route parameter or remove it.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "`reason` is accepted by the schema and API but silently discarded",
+      "message": "The refund schema exposes a `reason` field, the controller passes it to `RefundsService.refund()`, but the service parameter is named `_reason` and the value is never stored in `RefundResult` or used in any log. Either store `reason` in the refund record (useful for audit trails) or remove it from the schema to avoid misleading callers into thinking it is persisted.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 2,
+    "totals": {
+      "findings": 14,
+      "issues": 14,
+      "true_positives": 12,
+      "matched_findings": 13,
+      "false_positives": 1,
+      "false_negatives": 2
+    },
+    "metrics": {
+      "precision": 0.9285714285714286,
+      "recall": 0.8571428571428571,
+      "f1": 0.8914285714285715
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "module-level"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "camelCase"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "over-refund"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "created_at"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "assert"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "undefined"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "schema"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "DI"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr2-correctness-broken-sort-cents",
+      "pr2-security-card-pan-in-response",
+      "pr2-correctness-refund-amount-coercion",
+      "pr2-correctness-refund-no-amount-cap",
+      "pr2-quality-module-level-state",
+      "pr2-correctness-zero-amount-refund",
+      "pr2-quality-console-log-business-events",
+      "pr2-validation-loose-refund-schema",
+      "pr2-correctness-refund-empty-200",
+      "pr2-test-passes-for-wrong-reason",
+      "pr2-standards-response-naming-snake",
+      "pr2-security-customer-id-logged"
+    ],
+    "unmatched_findings": [
+      5
+    ],
+    "unmatched_issue_ids": [
+      "pr2-performance-history-in-memory-filter",
+      "pr2-performance-n-plus-one-refund-enrich"
+    ],
+    "per_category": {
+      "performance": {
+        "total": 2,
+        "found": 0
+      },
+      "correctness": {
+        "total": 5,
+        "found": 5
+      },
+      "security": {
+        "total": 2,
+        "found": 2
+      },
+      "quality": {
+        "total": 3,
+        "found": 3
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "standards": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 5,
+        "found": 3
+      },
+      "should": {
+        "total": 8,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 1,
+        "found": 1
+      }
+    }
+  },
+  "error": null
+}

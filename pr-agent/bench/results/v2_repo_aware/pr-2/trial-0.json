@@ -1,0 +1,340 @@
+{
+  "version": "v2_repo_aware",
+  "pr": 2,
+  "trial": 0,
+  "title": "Add refunds endpoint and customer transaction history",
+  "elapsed_seconds": 189.96438312530518,
+  "cost_usd": 0.29060749999999996,
+  "usage": {
+    "input_tokens": 13,
+    "cache_creation_input_tokens": 16286,
+    "cache_read_input_tokens": 269600,
+    "output_tokens": 9575
+  },
+  "summary": "This PR adds a refunds endpoint and customer transaction history endpoint. The overall approach is reasonable but there are several must-fix issues: a module-level singleton store causes cross-test contamination and breaks the instance-isolation pattern established by InMemoryTransactionRepository; the sort in customerHistoryController uses the wrong property name (created_at vs camelCase createdAt), making it a silent no-op; all three new log calls bypass the project's pino logger and its PII-redaction config; and there is no cumulative refund guard, so a transaction can be refunded multiple times up to its full amount each time. There are also a number of should-fix issues around a confusing 200 response for missing transactions, weak schema validation on the refund amount, a broken unit-conversion heuristic in business logic, a suspicious card_number cast in the history response, and tests that are structured correctly but assert almost nothing meaningful.",
+  "findings": [
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Module-level refundsStore is a singleton shared across all app instances and tests",
+      "message": "const refundsStore is declared at module scope, so every RefundsService instance shares the same object for the lifetime of the Node.js process. In the test suite, each `createApp()` call gets a fresh InMemoryTransactionRepository (instance-scoped Map) but they all write into the same refundsStore. Refunds created in one `describe` block bleed into every subsequent test. This also means the application cannot be safely instantiated twice in the same process (e.g. for blue-green or multi-tenant use). Move the store into the class as a private field \u2014 matching the exact pattern InMemoryTransactionRepository already uses \u2014 and expose a RefundsRepository abstraction so it can be injected in tests.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 28,
+      "line_end": 32,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Sort comparator uses `created_at` (undefined) instead of `createdAt` \u2014 sort is a no-op",
+      "message": "Transaction objects have `createdAt` (camelCase) as defined in domain/transaction.ts. The comparator accesses `a.created_at` and `b.created_at`, which are always undefined. All comparisons return 0, so the array is never sorted. Fix: change to `a.createdAt` / `b.createdAt`. The typed parameter `(a: any, b: any)` hid this from the compiler; changing them to `(a: Transaction, b: Transaction)` would have surfaced it as a type error.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 25,
+      "line_end": 55,
+      "category": "security",
+      "severity": "must",
+      "title": "console.log bypasses pino logger and its PII redaction rules",
+      "message": "The project has a configured pino logger in src/logger.ts with redact paths for card.number, card.cvc, and related fields, and it is silenced in test mode. Three new console.log calls (lines 25, 55 in refundsService and line 15 in customerHistoryController) bypass all of this: they are not silenced in tests, they are unstructured, they are not associated with a requestId, and they could echo sensitive values (transactionId, refundId, amounts) without redaction. Replace all three with calls to the shared `logger` import, following the structured pattern used in paymentsService.ts (logger.info / logger.warn with an object payload and a message key).",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 35,
+      "line_end": 56,
+      "category": "security",
+      "severity": "must",
+      "title": "No cumulative refund guard \u2014 transaction can be refunded multiple times",
+      "message": "The guard on line 37 only checks that a single refund request does not exceed the transaction's original amount. It does not check the sum of all previously issued refunds. A caller can POST /refunds with { transaction_id: X, amount: 1000 } ten times and receive ten accepted refund records each for the full amount. Fix: in the `refund()` method, call `listRefundsForTransaction(transactionId)` first, sum the existing refund amounts, then validate that `existingTotal + refundAmount <= tx.amount`. Return a 422/AppError if the check fails.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 24,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Missing transaction silently returns `200 {}` instead of 404",
+      "message": "When the transaction does not exist, the controller returns HTTP 200 with an empty JSON object. Callers cannot distinguish 'refund created' from 'transaction not found'. Every other missing-resource path in this codebase throws `notFound()` from src/errors.ts, which the errorHandler serialises into a 404 with `{ error: { code: 'not_found', message: '...' } }`. The fix is to throw `notFound('Transaction not found')` in RefundsService instead of returning null, letting the existing error-handling infrastructure do its job.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 5,
+      "line_end": 5,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Refund `amount` not validated as positive integer \u2014 negative and float values accepted",
+      "message": "chargeSchema uses `z.number().int().positive()` for the charge amount. refundSchema uses only `z.number().optional()`, so clients can send `amount: -500` or `amount: 9.99`. A negative refund silently passes the `refundAmount > tx.amount` guard (false for any negative number) and creates a refund record for a negative amount. Change to `z.number().int().positive().optional()` to match the convention established by chargeSchema.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 37,
+      "line_end": 44,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Silent dollar-to-cents unit guessing is dangerous and ambiguous",
+      "message": "Lines 37-44 implement a heuristic: if the refund amount exceeds the stored amount, multiply by 100 and see if that fits. The comment says 'new clients sometimes send dollars'. This silently reinterprets a value in business-logic rather than rejecting the request, and the heuristic is wrong \u2014 a $50 refund on a $100 charge stored as 10000 cents would be sent as `amount: 50`, but 50 > 10000 is false, so the code would never even enter this branch and would create a $0.50 (50 cent) refund. The unit should be defined in the API contract (the Zod schema and docs), enforced there, and the guessing code removed entirely.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 43,
+      "line_end": 43,
+      "category": "security",
+      "severity": "should",
+      "title": "`card_number` field exposes a broken cast that could leak PAN if Transaction shape changes",
+      "message": "Line 43 casts `tx` to an anonymous type that has `card_number?: string` and uses it as a fallback to `tx.cardLast4`. The Transaction domain type has no such field \u2014 the cast always evaluates the nullish fallback, so today the field is the last-4 digits under the misleading key `card_number`. Any future refactor that does add raw card data to Transaction (even accidentally) would start echoing it in every history response without any pino redaction. Remove the `card_number` key from the response entirely; `card_last4` is already present and correct.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 1,
+      "line_end": 39,
+      "category": "test",
+      "severity": "should",
+      "title": "New tests assert almost nothing \u2014 all three cases will pass even if the endpoints are broken",
+      "message": "`expect(refund.body).toBeDefined()` always passes because supertest sets res.body to `{}` for empty responses. `expect(refund.status).toBeLessThan(500)` accepts 200, 201, 400, 404 equally. `expect(res.body).toBeDefined()` in the history test passes regardless of response content. Compare with chargeRoute.test.ts which checks status codes, body shapes, field values, and edge cases (declined card, 404 for unknown id). The refund test should at minimum: assert status 201 and verify `refund_id`, `transaction_id`, `amount` in the body; assert status 404 (not just <500) for an unknown transaction; and for history, charge first then verify the transaction appears in the list with correct `customer_id`.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/app.ts",
+      "line_start": 15,
+      "line_end": 17,
+      "category": "standards",
+      "severity": "should",
+      "title": "`AppDeps` not extended for the new services \u2014 refund state cannot be injected in tests",
+      "message": "The `AppDeps` interface only exposes `payments?: PaymentsService`. Because `RefundsService` and the shared `transactionRepo` cannot be injected, test code is forced to use the real FakeGateway + real in-memory repo and cannot, for example, pre-seed refund state. Extend AppDeps to at least accept `refunds?: RefundsService` and `transactionRepo?: TransactionRepository`, following the same optional-override pattern already used for `payments`.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 9,
+      "line_end": 11,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "`historyQuerySchema` is dead code \u2014 never imported or used",
+      "message": "The schema is declared but never imported anywhere. The customer ID comes from `req.params.id` in the controller, not from a validated query object. Remove it to keep the file focused.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Loose equality `==` used to compare customerId strings",
+      "message": "`tx.customerId == customerId` uses `==` instead of `===`. Both sides are strings (or undefined), so there is no practical difference today, but the rest of the codebase consistently uses strict equality. Use `===` to prevent future surprises and satisfy any strict linting rules.",
+      "source": "v2_repo_aware",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 28,
+      "line_end": 28,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Sort comparator typed as `any` despite `mine` being `Transaction[]`",
+      "message": "`mine.sort((a: any, b: any)` \u2014 the array is already typed as `Transaction[]`, so `a` and `b` are `Transaction`. The `any` annotations silence the compiler and hid the `created_at` vs `createdAt` bug. Change to `(a: Transaction, b: Transaction)` (no import needed, it is already imported at the top of the file).",
+      "source": "v2_repo_aware",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 2,
+    "totals": {
+      "findings": 13,
+      "issues": 14,
+      "true_positives": 12,
+      "matched_findings": 12,
+      "false_positives": 1,
+      "false_negatives": 2
+    },
+    "metrics": {
+      "precision": 0.9230769230769231,
+      "recall": 0.8571428571428571,
+      "f1": 0.888888888888889
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "singleton"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "camelCase"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "DI"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "100"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "sum"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "validate"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "positive"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "toBeDefined"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "schema"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "undefined"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr2-correctness-broken-sort-cents",
+      "pr2-security-card-pan-in-response",
+      "pr2-correctness-refund-amount-coercion",
+      "pr2-correctness-refund-no-amount-cap",
+      "pr2-quality-module-level-state",
+      "pr2-correctness-zero-amount-refund",
+      "pr2-quality-console-log-business-events",
+      "pr2-validation-loose-refund-schema",
+      "pr2-correctness-refund-empty-200",
+      "pr2-test-passes-for-wrong-reason",
+      "pr2-standards-response-naming-snake",
+      "pr2-security-customer-id-logged"
+    ],
+    "unmatched_findings": [
+      9
+    ],
+    "unmatched_issue_ids": [
+      "pr2-performance-history-in-memory-filter",
+      "pr2-performance-n-plus-one-refund-enrich"
+    ],
+    "per_category": {
+      "performance": {
+        "total": 2,
+        "found": 0
+      },
+      "correctness": {
+        "total": 5,
+        "found": 5
+      },
+      "security": {
+        "total": 2,
+        "found": 2
+      },
+      "quality": {
+        "total": 3,
+        "found": 3
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "standards": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 5,
+        "found": 3
+      },
+      "should": {
+        "total": 8,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 1,
+        "found": 1
+      }
+    }
+  },
+  "error": null
+}

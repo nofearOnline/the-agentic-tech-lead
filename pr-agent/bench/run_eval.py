@@ -101,18 +101,59 @@ def _ground_truth_for_pr(pr_number: int) -> Path | None:
     return None
 
 
+def _looks_throttled(result: Any) -> bool:
+    """A run that produced zero findings AND cost nothing almost always means
+    the `claude` CLI hit a usage/rate limit and returned an empty (but
+    non-error) envelope. Treat it as a soft failure worth one retry rather
+    than recording a misleading 0-finding/$0 trial that poisons the means.
+    """
+    try:
+        no_findings = not getattr(result, "findings", None)
+        no_cost = float(getattr(result, "cost_usd", 0.0)) == 0.0
+    except Exception:  # noqa: BLE001
+        return False
+    return no_findings and no_cost
+
+
 def run_single(
     version: VersionSpec,
     pr: PullRequest,
     trial: int,
     config: Config,
+    *,
+    retry_on_blank: bool = True,
+    blank_backoff_seconds: float = 45.0,
 ) -> TrialResult:
-    """Run one trial of one version against one PR. Score and return."""
+    """Run one trial of one version against one PR. Score and return.
+
+    If the first attempt comes back blank (0 findings, $0 cost) we assume the
+    CLI was throttled and retry once after a short backoff before giving up.
+    """
 
     started = time.time()
-    try:
-        result = version.review_fn(pr, config)
-    except Exception as exc:  # noqa: BLE001
+    attempts = 2 if retry_on_blank else 1
+    result = None
+    last_exc: str | None = None
+    for attempt in range(attempts):
+        try:
+            result = version.review_fn(pr, config)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}"
+            result = None
+        else:
+            last_exc = None
+            if not _looks_throttled(result):
+                break  # got real output
+        # Either an exception or a blank/throttled result; back off and retry.
+        if attempt + 1 < attempts:
+            sys.stderr.write(
+                f"  ~ {version.name} pr={pr.number} trial={trial} attempt "
+                f"{attempt + 1} {'errored' if last_exc else 'came back blank'}; "
+                f"retrying in {blank_backoff_seconds:.0f}s...\n"
+            )
+            time.sleep(blank_backoff_seconds)
+
+    if result is None or _looks_throttled(result):
         return TrialResult(
             version=version.name,
             pr=int(pr.number),
@@ -124,7 +165,8 @@ def run_single(
             summary="",
             findings=[],
             score=None,
-            error=f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}",
+            error=last_exc
+            or "blank result after retry (likely CLI usage/rate-limit throttling)",
         )
     elapsed = time.time() - started
 
@@ -161,6 +203,27 @@ def _save(result: TrialResult, output_dir: Path) -> Path:
     path = target_dir / f"trial-{result.trial}.json"
     path.write_text(json.dumps(asdict(result), indent=2))
     return path
+
+
+def _already_succeeded(output_dir: Path, version: str, pr: int, trial: int) -> bool:
+    """True if this (version, pr, trial) already has a usable result on disk:
+    no error AND not a blank/throttled run. Used by --resume to skip work
+    that's already done so the matrix can be re-invoked after a throttle death.
+    """
+    path = output_dir / version / f"pr-{pr}" / f"trial-{trial}.json"
+    if not path.exists():
+        return False
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return False
+    if data.get("error"):
+        return False
+    findings = data.get("findings") or []
+    cost = float(data.get("cost_usd", 0.0) or 0.0)
+    # Old blank/throttled trials were written with error=null; treat them as
+    # not-done so they get re-run.
+    return bool(findings) or cost > 0.0
 
 
 def _summarize_line(r: TrialResult) -> str:
@@ -211,6 +274,13 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Path to pr-agent/config.yaml (default: auto-detect)",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip (version, PR, trial) cells that already have a usable result "
+        "on disk. Re-runs only missing, errored, or blank/throttled cells so the "
+        "matrix can be safely re-invoked after a throttle interruption.",
+    )
     args = parser.parse_args(argv)
 
     config = load_config(args.config)
@@ -240,11 +310,20 @@ def main(argv: list[str] | None = None) -> int:
     sys.stderr.write(f"Results under {output_dir}\n\n")
 
     total_cost = 0.0
+    skipped = 0
     for version in versions:
         sys.stderr.write(f"--- {version.name} ---\n")
         for pr_n in prs:
             pr = pr_cache[pr_n]
             for trial in range(trials):
+                if args.resume and _already_succeeded(
+                    output_dir, version.name, pr_n, trial
+                ):
+                    skipped += 1
+                    sys.stderr.write(
+                        f"  pr={pr_n} trial={trial}  (skip: already done)\n"
+                    )
+                    continue
                 result = run_single(version, pr, trial, config)
                 _save(result, output_dir)
                 total_cost += result.cost_usd
@@ -255,6 +334,9 @@ def main(argv: list[str] | None = None) -> int:
                         f"(${result.cost_usd:.2f} > ${config.eval.max_cost_per_run_usd:.2f})\n"
                     )
         sys.stderr.write("\n")
+
+    if args.resume and skipped:
+        sys.stderr.write(f"Resumed: skipped {skipped} already-completed cell(s).\n")
 
     sys.stderr.write(f"Total cost across all runs: ${total_cost:.4f}\n")
     return 0

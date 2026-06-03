@@ -180,6 +180,82 @@ def _markdown_summary(rows: list[Aggregate]) -> str:
     return header + "\n".join(body_lines)
 
 
+def _markdown_version_rollup(rows: list[Aggregate]) -> str:
+    """Per-version summary, averaged across all PRs/trials. This is the
+    'one slide' view: each version as a single row of mean cost / recall / F1
+    so the Teach -> Compose -> Govern arc reads top-to-bottom.
+    """
+    by_version: dict[str, list[Aggregate]] = defaultdict(list)
+    for r in rows:
+        by_version[r.version].append(r)
+
+    # Stable order matching the evolution narrative if present.
+    order = [
+        "v1_single_shot",
+        "v2_repo_aware",
+        "v3_persona_bundle",
+        "v4_parallel_personas",
+        "v5_tiered",
+    ]
+    versions = [v for v in order if v in by_version] + [
+        v for v in sorted(by_version) if v not in order
+    ]
+
+    header = (
+        "| version | mean cost | mean latency | precision | recall | F1 | "
+        "vs v1 cost | vs v4 cost |\n"
+        "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
+    )
+
+    # Weight each (version, PR) aggregate by its trial count so the mean is a
+    # true per-trial mean, not a mean-of-means.
+    def _wmean(aggs: list[Aggregate], attr: str) -> float:
+        num = sum(getattr(a, attr) * a.trials for a in aggs)
+        den = sum(a.trials for a in aggs)
+        return num / den if den else 0.0
+
+    summaries: dict[str, dict[str, float]] = {}
+    for v in versions:
+        aggs = by_version[v]
+        summaries[v] = {
+            "cost": _wmean(aggs, "cost_mean"),
+            "latency": _wmean(aggs, "elapsed_mean"),
+            "precision": _wmean(aggs, "precision_mean"),
+            "recall": _wmean(aggs, "recall_mean"),
+            "f1": _wmean(aggs, "f1_mean"),
+        }
+
+    v1_cost = summaries.get("v1_single_shot", {}).get("cost", 0.0)
+    v4_cost = summaries.get("v4_parallel_personas", {}).get("cost", 0.0)
+
+    body = []
+    for v in versions:
+        s = summaries[v]
+        v1x = f"{s['cost'] / v1_cost:.1f}x" if v1_cost else "-"
+        v4x = f"{s['cost'] / v4_cost:.2f}x" if v4_cost else "-"
+        body.append(
+            f"| {v} | ${s['cost']:.3f} | {s['latency']:.0f}s | "
+            f"{s['precision']:.2f} | {s['recall']:.2f} | {s['f1']:.2f} | "
+            f"{v1x} | {v4x} |"
+        )
+    return "## Per-version rollup (mean across all PRs/trials)\n\n" + header + "\n".join(body)
+
+
+def _markdown_cost_recall_data(rows: list[Aggregate]) -> str:
+    """Plottable cost-vs-recall points, one per (version, PR). Drop straight
+    into a scatter / bubble chart for the deck.
+    """
+    out = ["## Cost vs. recall (per version x PR -- chart data)\n"]
+    out.append("| version | PR | mean cost | mean recall | mean F1 |")
+    out.append("| --- | --- | --- | --- | --- |")
+    for r in sorted(rows, key=lambda a: (a.version, a.pr)):
+        out.append(
+            f"| {r.version} | #{r.pr} | {r.cost_mean:.3f} | "
+            f"{r.recall_mean:.2f} | {r.f1_mean:.2f} |"
+        )
+    return "\n".join(out)
+
+
 def _markdown_issue_heatmap(
     rows: list[Aggregate], results_dir: Path
 ) -> str:
@@ -269,7 +345,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print("## Run comparison\n")
+    print(_markdown_version_rollup(aggregates))
+    print("\n")
     print(_markdown_summary(aggregates))
+    print("\n")
+    print(_markdown_cost_recall_data(aggregates))
     print(_markdown_issue_heatmap(aggregates, results_dir))
 
     # Cost roll-up

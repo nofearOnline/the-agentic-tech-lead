@@ -1,0 +1,360 @@
+{
+  "version": "v1_single_shot",
+  "pr": 2,
+  "trial": 2,
+  "title": "Add refunds endpoint and customer transaction history",
+  "elapsed_seconds": 2895.947748184204,
+  "cost_usd": 0.1046215,
+  "usage": {
+    "input_tokens": 0,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 0
+  },
+  "summary": "This PR adds two new endpoints but ships several blocking issues: a potential full-card-number leak in the response body, no authorization on the customer history route, a silent sort bug (sorting on `created_at` but the domain field is `createdAt`), a 200-instead-of-404 on missing transactions, no cumulative over-refund guard, and a module-level refunds store that pollutes state across test runs. There are also meaningful performance and correctness problems with the unbounded `findAll` scan, the broken dollar/cents heuristic, and nearly useless test assertions. Recommend a second pass before merging.",
+  "findings": [
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 44,
+      "line_end": 44,
+      "category": "security",
+      "severity": "must",
+      "title": "Potential full PAN exposed in API response via `card_number` field",
+      "message": "The response includes `card_number: (tx as unknown as { card_number?: string }).card_number ?? tx.cardLast4`. If any code path ever populates a `card_number` property on the stored Transaction (e.g. a future gateway adapter that stores raw auth data), this will silently leak the full PAN to callers. Even if it currently falls back to `cardLast4`, the cast bypasses TypeScript type-safety intentionally, making it a latent PCI violation. Remove the `card_number` field from the response entirely; `card_last4` is the only safe thing to return.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/routes.ts",
+      "line_start": 23,
+      "line_end": 23,
+      "category": "security",
+      "severity": "must",
+      "title": "No authentication or authorization on customer transaction history endpoint",
+      "message": "`GET /customers/:id/transactions` returns all transactions and inlined refunds for any customer ID with no auth check. Any unauthenticated caller can enumerate financial history for any customer by simply guessing or iterating IDs. Add authentication middleware (and an authorization check that the caller is allowed to view this customer's data) before this route is reachable.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 26,
+      "line_end": 31,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Sort is a silent no-op \u2014 compares `created_at` but domain field is `createdAt`",
+      "message": "The comparator accesses `a.created_at` and `b.created_at`, but `Transaction` objects use camelCase `createdAt`. Both sides will always be `undefined`, every comparison returns 0, and the array is never actually sorted. The snake_case renaming only happens later in the response-mapping block (line 47). Fix: sort after mapping, or use `a.createdAt` in the comparator.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Module-level `refundsStore` is shared across all service instances and test runs",
+      "message": "`const refundsStore: Record<string, RefundResult> = {}` is a module-level singleton. Every call to `createApp()` (e.g. in tests) creates a new `RefundsService` but all of them write to and read from the same store. Refunds created in one test bleed into subsequent tests, producing false positives. In any future scenario with multiple DI instances or hot-module-reload the state corruption would be production-impacting too. Move `refundsStore` into the `RefundsService` class as an instance field.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 23,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Returns HTTP 200 with empty body when the referenced transaction does not exist",
+      "message": "When `refund()` returns `null` (transaction not found) the controller responds `200 {}`. This is semantically wrong: the client cannot distinguish a successful no-op from a real error, and tooling/tests will not flag it. Return `404` with a descriptive error body so callers can handle the case correctly.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 30,
+      "line_end": 63,
+      "category": "correctness",
+      "severity": "must",
+      "title": "No guard against cumulative over-refunding a transaction",
+      "message": "`refund()` only checks that a single refund doesn't exceed `tx.amount`; it never sums up previously-issued refunds. Calling `POST /refunds` repeatedly against the same transaction ID will issue unlimited refunds, each up to the original transaction amount. Add a check: `sumOfExistingRefunds + refundAmount <= tx.amount` before persisting.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 36,
+      "line_end": 43,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Dollar/cents dual-unit heuristic silently corrupts refund amounts",
+      "message": "The comment says 'new clients sometimes send dollars, so handle both', but the logic is wrong. If `tx.amount` is 5000 (50.00 USD in cents) and the client sends `amount: 50` intending 50 cents, then `50 > 5000` is false and 50 cents is refunded \u2014 no conversion. If a client sends `amount: 60` (also less than 5000), the same: 60 cents refunded silently. The conversion branch is only reached when `refundAmount > tx.amount`, which means it only triggers for obviously-large values. There is no reliable way to distinguish 'dollars' from 'cents' without a per-client contract. Remove this heuristic entirely and enforce a single unit in the schema; reject requests that do not conform with a 422.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 18,
+      "line_end": 36,
+      "category": "performance",
+      "severity": "should",
+      "title": "Unbounded `findAll()` scan with no pagination; N+1 enrichment calls",
+      "message": "Two separate performance issues in the same code path: (1) `findAll()` loads every transaction across all customers into memory, then filters in-process. With a large dataset this is a memory and CPU spike on every request. The repository should gain a `findByCustomerId(id, options)` method with limit/offset or cursor support. (2) For each transaction in `mine`, an `await enrichTransactionWithRefunds(tx)` call is made inside a serial loop, each of which iterates the entire `refundsStore`. This is O(N\u00d7M) where N is the customer's transactions and M is the total number of refunds. Batch-load refunds for the relevant transaction IDs in one pass instead.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 5,
+      "line_end": 5,
+      "category": "correctness",
+      "severity": "should",
+      "title": "`amount` field accepts zero and negative values",
+      "message": "`z.number().optional()` allows `0`, `-1`, or any negative number as a valid refund amount. A zero or negative refund would pass validation and be stored. Change to `z.number().positive().optional()` (or `.gt(0)`) so the schema rejects nonsensical values before they reach the service.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 13,
+      "line_end": 23,
+      "category": "correctness",
+      "severity": "should",
+      "title": "`reason` is accepted by schema and service signature but silently discarded",
+      "message": "The `refundSchema` declares a `reason` field, `RefundsController` passes it as `payload.reason`, and `RefundsService.refund` accepts it as `_reason` \u2014 the leading underscore signals it's intentionally unused. `reason` is never stored in `RefundResult` and never returned to the caller. Either add `reason` to `RefundResult` and persist it (likely the intended behaviour for audit trails), or remove it from the schema and controller to avoid misleading API consumers.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "standards",
+      "severity": "should",
+      "title": "Loose equality `==` used instead of strict `===` for customerId comparison",
+      "message": "`tx.customerId == customerId` should be `tx.customerId === customerId`. Both values are strings; loose equality offers no benefit here and can mask type mismatches in the future.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 18,
+      "line_end": 37,
+      "category": "test",
+      "severity": "should",
+      "title": "Tests assert almost nothing \u2014 `toBeDefined()` and `toBeLessThan(500)` are not meaningful",
+      "message": "The happy-path test checks only that `refund.body` is defined (it always will be \u2014 even `{}` passes). The missing-transaction test checks only that the status is not a 5xx. Neither test verifies response shape, HTTP status codes (201 vs 200), field values, or correct handling of over-refunds, negative amounts, or idempotency. Add specific assertions: status code, `refund_id` format, `amount` matches requested value, repeated refunds are rejected once the total is met, etc.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 9,
+      "line_end": 11,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "`historyQuerySchema` is exported but never imported or used",
+      "message": "`historyQuerySchema` is defined in this file but is not referenced anywhere in the diff. Remove it to avoid dead code, or use it in `CustomerHistoryController` if query-parameter validation is intended.",
+      "source": "v1_generalist",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 15,
+      "line_end": 15,
+      "category": "security",
+      "severity": "suggestion",
+      "title": "`console.log` emits customer IDs and transaction IDs to unstructured stdout",
+      "message": "Using `console.log` instead of the structured `pino` logger (already wired in via `pino-http`) means customer IDs and transaction IDs are emitted as plain text with no correlation to request IDs, no log-level filtering, and potentially captured in log aggregators without masking. Switch to the request-scoped `req.log.info(...)` or a module-level pino logger, consistent with the rest of the service.",
+      "source": "v1_generalist",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 2,
+    "totals": {
+      "findings": 14,
+      "issues": 14,
+      "true_positives": 14,
+      "matched_findings": 13,
+      "false_positives": 1,
+      "false_negatives": 0
+    },
+    "metrics": {
+      "precision": 0.9285714285714286,
+      "recall": 1.0,
+      "f1": 0.962962962962963
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "singleton"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "positive"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "over-refund"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-performance-history-in-memory-filter",
+        "matched_keyword": "findAll"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-performance-n-plus-one-refund-enrich",
+        "matched_keyword": "N+1"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "sum"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "DI"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "toBeDefined"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-performance-history-in-memory-filter",
+        "matched_keyword": "filter"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "console.log"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr2-performance-history-in-memory-filter",
+      "pr2-performance-n-plus-one-refund-enrich",
+      "pr2-correctness-broken-sort-cents",
+      "pr2-security-card-pan-in-response",
+      "pr2-correctness-refund-amount-coercion",
+      "pr2-correctness-refund-no-amount-cap",
+      "pr2-quality-module-level-state",
+      "pr2-correctness-zero-amount-refund",
+      "pr2-quality-console-log-business-events",
+      "pr2-validation-loose-refund-schema",
+      "pr2-correctness-refund-empty-200",
+      "pr2-test-passes-for-wrong-reason",
+      "pr2-standards-response-naming-snake",
+      "pr2-security-customer-id-logged"
+    ],
+    "unmatched_findings": [
+      1
+    ],
+    "unmatched_issue_ids": [],
+    "per_category": {
+      "performance": {
+        "total": 2,
+        "found": 2
+      },
+      "correctness": {
+        "total": 5,
+        "found": 5
+      },
+      "security": {
+        "total": 2,
+        "found": 2
+      },
+      "quality": {
+        "total": 3,
+        "found": 3
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "standards": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 5,
+        "found": 5
+      },
+      "should": {
+        "total": 8,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 1,
+        "found": 1
+      }
+    }
+  },
+  "error": null
+}

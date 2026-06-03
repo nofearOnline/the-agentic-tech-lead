@@ -1,0 +1,781 @@
+{
+  "version": "v4_parallel_personas",
+  "pr": 2,
+  "trial": 0,
+  "title": "Add refunds endpoint and customer transaction history",
+  "elapsed_seconds": 9496.59652209282,
+  "cost_usd": 0.4708614,
+  "usage": {
+    "input_tokens": 8,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 42008,
+    "output_tokens": 29229
+  },
+  "summary": "Skeptic pass failed; returning the de-duplicated union of the four persona agents' findings (unfiltered).",
+  "findings": [
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "kiss",
+      "severity": "must",
+      "title": "Module-level `refundsStore` is hidden global state that leaks across tests",
+      "message": "Every `RefundsService` instance in every test shares this one mutable map because it lives at module scope. The test file creates a fresh `createApp()` per test, but the store is never reset \u2014 a refund created in test A is visible in test B. The rest of the codebase injects repositories (`InMemoryTransactionRepository`) for exactly this reason. Fix: turn `refundsStore` into a class property (`private readonly store: Record<string, RefundResult> = {}`), or extract a proper `InMemoryRefundsRepository` and inject it the same way `TransactionRepository` is injected.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 28,
+      "line_end": 32,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Sort compares `a.created_at` but Transaction has `createdAt` \u2014 sort is a silent no-op",
+      "message": "`Transaction` domain objects use camelCase `createdAt`. The snake_case `created_at` property doesn't exist, so both comparands are always `undefined`, every comparison returns `0`, and `Array.sort` leaves the array in insertion order \u2014 exactly the opposite of the documented 'newest-first' guarantee. The parameters are typed `any` specifically to suppress the compiler warning about this. Fix: remove the `any` cast, reference `a.createdAt` / `b.createdAt`, and use the idiomatic form: `mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt))`.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 44,
+      "line_end": 44,
+      "category": "kiss",
+      "severity": "should",
+      "title": "`as unknown as { card_number? }` is a type-system escape hatch hiding a design smell",
+      "message": "`Transaction` has no `card_number` field, so the code double-casts (`as unknown as { card_number?: string }`) to silence TypeScript instead of fixing the model. The compiler is telling you something useful here. Either the domain type needs a `cardNumber` field, or this whole branch (`?? tx.cardLast4`) is dead code that should be removed. Gagging the compiler with `as unknown as` is the same problem as `@ts-nocheck` at expression scope.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 35,
+      "line_end": 44,
+      "category": "kiss",
+      "severity": "should",
+      "title": "Speculative dollar-to-cent conversion: YAGNI, and it silently eats validation errors",
+      "message": "The comment says 'new clients sometimes send dollars' but there is zero evidence of this in the diff \u2014 no test, no caller, no existing client. Pure speculation. Worse, when the heuristic fails the code silently clamps `refundAmount` to `tx.amount` rather than returning a 422. A caller sending the wrong unit gets back a 201 for a refund of the full original amount, with no feedback that anything went wrong. Delete this block entirely. If a unit mismatch is a real concern, add it to the Zod schema as a max-value validator so it is rejected explicitly at the boundary.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "kiss",
+      "severity": "should",
+      "title": "`_reason` parameter is accepted, threaded through the stack, and silently discarded",
+      "message": "`reason` is parsed by the Zod schema, passed from the controller to `refunds.refund()`, and then the method prefixes it with `_` and throws it away \u2014 it is not stored in `RefundResult`, not logged, not used. This is YAGNI spread over three files. Remove it from the method signature and `RefundResult` now. Add it back when there is an actual consumer.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 59,
+      "line_end": 67,
+      "category": "kiss",
+      "severity": "should",
+      "title": "Manual `Object.keys` loop with an impossible `undefined` guard over-complicates a filter",
+      "message": "`Object.keys()` never yields `undefined` entries, so `if (k === undefined) continue` is defensive theater that trains readers to doubt their understanding of the language. The whole method is three lines with `Object.values`: `return Object.values(this.store).filter(r => r.transactionId === transactionId);` (fixing the global-state issue first, of course). Use the idiomatic form.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 24,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Returns HTTP 200 when the transaction is not found \u2014 should be 404",
+      "message": "A 200 with an empty body tells every caller \u2014 including automated retries and support tooling \u2014 that the refund succeeded. A missing transaction is a client error; return `404` with an error body so callers can distinguish 'refunded' from 'transaction does not exist'.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 9,
+      "line_end": 11,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "`historyQuerySchema` is exported but never imported or used anywhere",
+      "message": "Dead code. No controller, test, or route in this diff imports `historyQuerySchema`. Delete it. Git remembers.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 22,
+      "line_end": 22,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Loose equality `==` comparing `customerId` strings",
+      "message": "`tx.customerId == customerId` uses loose equality. Both values are strings; use `===` throughout.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot",
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 17,
+      "line_end": 25,
+      "category": "performance",
+      "severity": "must",
+      "title": "Full table scan + in-memory filter on every request (O(all transactions))",
+      "message": "The comment says it out loud: 'Pull everything and filter in memory.' `this.transactions.findAll()` returns every transaction ever stored; the `customerId` predicate is then applied in JS. On 5M rows this fetches 5M records to return maybe 50. Memory and latency grow with total data you never wanted.\n\nThe fix is a `findByCustomerId(id: string): Promise<Transaction[]>` method on the repository interface \u2014 one predicated lookup (with an index on `customer_id`) instead of a full dump. `findAll()` should be removed from the `TransactionRepository` interface; it exists only to enable this pattern.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 36,
+      "line_end": 49,
+      "category": "performance",
+      "severity": "must",
+      "title": "N\u00d7M: one full refunds-store scan per customer transaction",
+      "message": "For each of the customer's N matching transactions, `enrichTransactionWithRefunds` calls `listRefundsForTransaction` (refundsService.ts:59\u201369), which iterates `Object.keys(refundsStore)` in full. Cost per request: O(N \u00d7 M) where N = customer's transactions and M = total refunds across all customers. 100 transactions \u00d7 10 K refunds = 1 M iterations per GET.\n\nFix: fetch all refunds for the N transaction IDs in a single pass (`refundsStore` values filtered once with a Set of the N IDs), then `groupBy(transactionId)` in memory. The enrichment loop then does a pure map with zero extra scans. Query count drops from N+1 to 1.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 50,
+      "line_end": 58,
+      "category": "performance",
+      "severity": "should",
+      "title": "No pagination \u2014 GET /customers/:id/transactions returns unbounded row set",
+      "message": "The response emits every transaction the customer has ever made with no `limit`, `offset`, or cursor. A high-volume customer (or a QA account used for years) will return tens of thousands of rows in a single response, buffering the entire set in memory before serialising.\n\nAdd `limit` (default 50, max 200) and a `cursor` (or `before`/`after` timestamp) query parameter. Return a `next_cursor` in the envelope so callers can paginate. The support-tool client almost certainly doesn't need page 47 of a customer's history on first load.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/repositories/transactionRepository.ts",
+      "line_start": 6,
+      "line_end": 6,
+      "category": "performance",
+      "severity": "should",
+      "title": "`findAll()` added to repository contract with no predicate or limit",
+      "message": "`findAll(): Promise<Transaction[]>` is now part of the public `TransactionRepository` interface. Any future implementation (Postgres, DynamoDB) is obligated to expose a method that dumps the entire transaction table with no filtering, no pagination, and no LIMIT clause. This encodes the anti-pattern into the contract.\n\nReplace it with `findByCustomerId(customerId: string, opts?: PageOptions): Promise<Transaction[]>`. The interface should express business intent, not 'give me everything'. Removing `findAll` from the interface also forces the controller to go through the right path and naturally blocks the in-memory filter from coming back.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 24,
+      "category": "standards",
+      "severity": "must",
+      "title": "200 returned when transaction is not found \u2014 should be 404",
+      "message": "When `result` is `null` the controller responds with `res.status(200).json({})`. A missing transaction is a not-found condition; returning 200 with an empty body tells every caller 'this worked' when it didn't. Clients can't distinguish success from a bad transaction ID, retry/idempotency logic breaks, and the bug shows up downstream far from its cause.\n\nFix: `return res.status(404).json({ error: 'transaction not found' });`",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 34,
+      "line_end": 43,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Over-refund silently capped to full amount \u2014 caller receives wrong amount with 'succeeded'",
+      "message": "When `refundAmount > tx.amount` the code attempts a dollar-to-cents heuristic, and if that also exceeds the original it silently sets `refundAmount = tx.amount` and continues. The response status is `201 Created`, `status: 'succeeded'`, and the `amount` field contains a different number than the caller requested \u2014 with no error, no warning, no indication the amount was changed.\n\nThis is a money-correctness failure: a partial-refund request for $500 on a $10 transaction silently becomes a $10 refund that looks identical to an intentional full refund. The right fix is to validate the amount at the boundary and return a 422 with a clear error message:\n\n```ts\nif (amount !== undefined && amount > tx.amount) {\n  throw new ValidationError(`Refund amount ${amount} exceeds transaction amount ${tx.amount}`);\n}\n```\n\nThe dollar/cents ambiguity comment also signals that the API contract is undefined \u2014 callers should document and agree on a single unit (cents), validated by the schema.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 18,
+      "line_end": 22,
+      "category": "test",
+      "severity": "must",
+      "title": "Successful-refund test asserts only `toBeDefined()` \u2014 proves nothing",
+      "message": "`expect(refund.body).toBeDefined()` passes whether the refund succeeded, failed, returned the wrong amount, or returned a completely different shape. This is a green check that manufactures false confidence on a money endpoint.\n\nA meaningful assertion for this test:\n```ts\nexpect(refund.status).toBe(201);\nexpect(refund.body).toMatchObject({\n  transaction_id: charge.body.id,\n  amount: 1000,\n  status: 'succeeded',\n});\nexpect(refund.body.refund_id).toMatch(/^rf_/);\n```\nAlso missing: a test that a partial refund returns the partial amount, not the full amount; and a test that a second over-refund is rejected.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 25,
+      "line_end": 31,
+      "category": "test",
+      "severity": "must",
+      "title": "`toBeLessThan(500)` on missing-transaction case accepts the wrong 200",
+      "message": "`expect(refund.status).toBeLessThan(500)` accepts any 2xx or 4xx status, including the `200 {}` this code actually returns for a missing transaction. If the 200\u2192404 fix above is made, this test would still pass (404 < 500), but it would also pass if the endpoint returned 200, 201, 302, or 404 \u2014 it asserts almost nothing. The assertion should be `expect(refund.status).toBe(404)` so the test actually guards the contract.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 34,
+      "line_end": 39,
+      "category": "test",
+      "severity": "must",
+      "title": "History test asserts only `res.body` is defined \u2014 zero coverage of actual behavior",
+      "message": "`expect(res.body).toBeDefined()` on the history endpoint passes whether the response is `{ transactions: [] }`, `{}`, `null` cast to JSON, or a 500 error body. There is no assertion on status code, shape, or the inlined refund data that was the point of building this endpoint.\n\nMinimum: `expect(res.status).toBe(200); expect(res.body).toMatchObject({ customer_id: 'cus_abc', transactions: [] });`. A realistic test should charge, refund, then verify the refund appears inlined on the returned transaction.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 27,
+      "line_end": 32,
+      "category": "correctness",
+      "severity": "should",
+      "title": "Sort uses `created_at` (snake_case) but Transaction domain field is `createdAt` \u2014 silent no-op",
+      "message": "The sort comparator accesses `a.created_at` and `b.created_at` with `: any` casts. The `Transaction` domain object uses `createdAt` (camelCase), so both values are `undefined` for every element; the comparator always returns `0` and the array is never sorted. Customers see transactions in insertion order, not newest-first.\n\nFix: `mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt));`\n\nThe comment `// 'created_at' matches our response field name` is the tell \u2014 the author mapped the response key from the sort key rather than from the domain field, which is where the confusion came from.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 38,
+      "line_end": 51,
+      "category": "standards",
+      "severity": "should",
+      "title": "Response object mixes snake_case and camelCase \u2014 inconsistent with rest of API",
+      "message": "The enriched transaction shape emits `card_number`, `card_last4`, `customer_id`, `gateway_reference`, `created_at`, `refund_total` alongside `id`, `amount`, `currency`, `status` \u2014 a mix of both conventions in a single object. The existing charge/transaction endpoints use camelCase (`transactionId`, `cardLast4`, `createdAt`). This forces every consumer to handle two casing styles from the same service.\n\nAlso, `card_number` (line 43) is populated via `(tx as unknown as { card_number?: string }).card_number ?? tx.cardLast4`. Because `Transaction` has no `card_number` field, this always evaluates to `tx.cardLast4`, making `card_number` in the response a misleading duplicate of `card_last4`. Remove the cast entirely and output a single, consistently-named `cardLast4` key.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 4,
+      "line_end": 6,
+      "category": "quality",
+      "severity": "should",
+      "title": "Refund schema allows zero, negative, and fractional-cent amounts",
+      "message": "`amount: z.number().optional()` permits `0`, `-500`, and `9.99` to reach the refund logic unchecked. Business logic assumes the amount is a positive integer (cents), but the boundary doesn't enforce it.\n\nFix:\n```ts\ntransaction_id: z.string().min(1),\namount: z.number().int().positive().optional(),\nreason: z.string().max(255).optional(),\n```",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 24,
+      "line_end": 24,
+      "category": "standards",
+      "severity": "should",
+      "title": "console.log in RefundsService \u2014 should use injected pino logger",
+      "message": "Lines 24 and 54 both use `console.log`. The project uses pino for structured logging (pino-http middleware is configured in `app.ts`). `console.log` bypasses log levels, structured fields, and pino's redaction list \u2014 and it prints the full refund ID and transaction ID as an unstructured string.\n\nThe logger should be injected into `RefundsService` (as the other services do) and calls replaced:\n```ts\nlogger.warn({ transactionId }, 'refund requested for unknown transaction');\nlogger.info({ refundId: refund.refundId, transactionId: tx.id, amount: refund.amount }, 'refund created');\n```",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 15,
+      "line_end": 15,
+      "category": "standards",
+      "severity": "should",
+      "title": "console.log in CustomerHistoryController \u2014 should use request-scoped pino logger",
+      "message": "`console.log('history requested for customer ' + customerId)` bypasses the structured pino logger and leaks the customer ID as a raw string to stdout, outside the redaction configuration. Replace with `req.log.info({ customerId }, 'customer history requested')` (pino-http attaches a child logger to every request at `req.log`).",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 16,
+      "line_end": 16,
+      "category": "test",
+      "severity": "should",
+      "title": "Module-level `refundsStore` is shared across all test instances \u2014 state bleeds between tests",
+      "message": "`const refundsStore: Record<string, RefundResult> = {}` is a module-level singleton. Every `createApp()` call in tests shares the same store, so a refund created in one `it` block is visible in the next. Currently the tests are too weak to notice, but once real assertions are added this will produce flaky order-dependent failures.\n\nMove `refundsStore` inside the `RefundsService` class (as an instance field) so each service instance \u2014 and therefore each `createApp()` in a test \u2014 gets its own isolated store.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 46,
+      "line_end": 47,
+      "category": "security",
+      "severity": "must",
+      "title": "PAN forwarded to API response via card_number field",
+      "message": "The response shape explicitly includes `card_number`, populated by casting the transaction to `{ card_number?: string }` and falling back to `cardLast4`. The cast is not defensive \u2014 it signals the author knows (or expects) the field to be present on some transaction objects. Any path that populates `tx.card_number` with a real PAN before reaching this controller will immediately forward it verbatim to the HTTP client, a PCI-DSS SA requirement 3.3 violation. Remove `card_number` from the response entirely; `card_last4` is the only card-derived field that should ever leave the service boundary.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/routes.ts",
+      "line_start": 20,
+      "line_end": 20,
+      "category": "security",
+      "severity": "must",
+      "title": "GET /customers/:id/transactions is an unauthenticated IDOR",
+      "message": "The route is wired with no authentication or ownership middleware. Any caller who supplies an arbitrary `:id` receives that customer's complete transaction history (IDs, amounts, card last-4, gateway references, refunds). This is a textbook Insecure Direct Object Reference (OWASP A01). Add an auth guard that verifies the caller's identity and then checks that the resolved principal is allowed to read the requested customer's data before the controller is reached.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/routes.ts",
+      "line_start": 19,
+      "line_end": 19,
+      "category": "security",
+      "severity": "must",
+      "title": "POST /refunds is unauthenticated \u2014 anyone can refund any transaction",
+      "message": "There is no authentication or authorisation middleware on this route. Any party that can reach the service and knows (or brute-forces) a valid `transaction_id` can issue a refund against it. Financial mutation endpoints must require a verified, authorised caller \u2014 add auth middleware and verify the caller owns or is entitled to act on the referenced transaction.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 15,
+      "line_end": 15,
+      "category": "security",
+      "severity": "should",
+      "title": "console.log with customer PII bypasses pino redaction controls",
+      "message": "`console.log('history requested for customer ' + customerId)` routes customer IDs to raw stdout, bypassing the pino logger that the project configures with a redaction allowlist. The same pattern appears in `refundsService.ts` at lines 24 and 57 (transaction IDs and refund amounts). Under PCI-DSS, log output must be controlled and sensitive identifiers must not appear in plaintext. Replace all three with `logger.info({ customerId }, 'history requested')` / `logger.info({ transactionId }, 'refund: transaction not found')` etc. \u2014 use structured log fields, never string concatenation into the message.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 36,
+      "line_end": 43,
+      "category": "security",
+      "severity": "should",
+      "title": "Silent cents-to-dollars unit conversion is a business-logic bypass",
+      "message": "When `refundAmount > tx.amount`, the code multiplies by 100 and re-checks. An attacker who sends `amount: 0.99` against a 99-cent transaction (stored as 99 cents) will have their request silently mutated to 99 cents. More dangerously, the fallback `refundAmount = tx.amount` silently caps any out-of-range value at a full refund \u2014 so a caller who sends `amount: 9999999` always gets a full refund regardless. The API contract must enforce a single unit; reject ambiguous inputs with a 422 rather than silently normalising them. Remove the auto-conversion block entirely.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 23,
+      "category": "security",
+      "severity": "should",
+      "title": "Transaction-ID oracle: 200 vs 201 leaks whether a transaction exists",
+      "message": "A missing transaction returns `200 {}` while a successful refund returns `201`. The status-code difference is an information oracle: an attacker can enumerate valid transaction IDs by probing until they get a 201. Return a consistent response for both cases (e.g., `201` with a refund object, or `404` when the transaction is not found \u2014 pick one and document it), and pair this with rate-limiting on the endpoint.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "fallback-dedup"
+      }
+    }
+  ],
+  "score": {
+    "pr": 2,
+    "totals": {
+      "findings": 30,
+      "issues": 14,
+      "true_positives": 14,
+      "matched_findings": 25,
+      "false_positives": 5,
+      "false_negatives": 0
+    },
+    "metrics": {
+      "precision": 0.8333333333333334,
+      "recall": 1.0,
+      "f1": 0.9090909090909091
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "module-level"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "zero"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "sum"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "DI"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "schema"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-performance-history-in-memory-filter",
+        "matched_keyword": "findAll"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr2-performance-n-plus-one-refund-enrich",
+        "matched_keyword": "N+1"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "cents"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "over-refund"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "validate"
+      },
+      {
+        "finding_index": 15,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "toBeDefined"
+      },
+      {
+        "finding_index": 16,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "assert"
+      },
+      {
+        "finding_index": 17,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "toBeDefined"
+      },
+      {
+        "finding_index": 18,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 18,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 19,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "created_at"
+      },
+      {
+        "finding_index": 19,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 19,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 20,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "positive"
+      },
+      {
+        "finding_index": 21,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "inject"
+      },
+      {
+        "finding_index": 21,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 21,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 22,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 23,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "singleton"
+      },
+      {
+        "finding_index": 24,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 27,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "cap"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 29,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr2-performance-history-in-memory-filter",
+      "pr2-performance-n-plus-one-refund-enrich",
+      "pr2-correctness-broken-sort-cents",
+      "pr2-security-card-pan-in-response",
+      "pr2-correctness-refund-amount-coercion",
+      "pr2-correctness-refund-no-amount-cap",
+      "pr2-quality-module-level-state",
+      "pr2-correctness-zero-amount-refund",
+      "pr2-quality-console-log-business-events",
+      "pr2-validation-loose-refund-schema",
+      "pr2-correctness-refund-empty-200",
+      "pr2-test-passes-for-wrong-reason",
+      "pr2-standards-response-naming-snake",
+      "pr2-security-customer-id-logged"
+    ],
+    "unmatched_findings": [
+      5,
+      11,
+      12,
+      25,
+      26
+    ],
+    "unmatched_issue_ids": [],
+    "per_category": {
+      "performance": {
+        "total": 2,
+        "found": 2
+      },
+      "correctness": {
+        "total": 5,
+        "found": 5
+      },
+      "security": {
+        "total": 2,
+        "found": 2
+      },
+      "quality": {
+        "total": 3,
+        "found": 3
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "standards": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 5,
+        "found": 5
+      },
+      "should": {
+        "total": 8,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 1,
+        "found": 1
+      }
+    }
+  },
+  "error": null
+}

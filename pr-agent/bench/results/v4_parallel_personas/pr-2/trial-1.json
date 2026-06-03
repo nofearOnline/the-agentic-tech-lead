@@ -1,0 +1,431 @@
+{
+  "version": "v4_parallel_personas",
+  "pr": 2,
+  "trial": 1,
+  "title": "Add refunds endpoint and customer transaction history",
+  "elapsed_seconds": 18507.581447839737,
+  "cost_usd": 0.55927265,
+  "usage": {
+    "input_tokens": 201,
+    "cache_creation_input_tokens": 18253,
+    "cache_read_input_tokens": 31387,
+    "output_tokens": 22591
+  },
+  "summary": "Pruned 21 raw findings down to 14 by merging duplicates across personas and dropping nothing as outright false (all claims check out against the diff), though several over-broad framings were toned down. High-confidence items where panels independently agreed: the silent over-refund coercion (quality_critic + security_hawk), the module-level shared refundsStore (quality_critic + security_hawk), console.log bypassing pino (quality_critic + security_hawk), the card_number field in the response (security_hawk + quality_critic), and loose == on customerId (quality_critic + security_hawk). I corrected the auth finding's wording (the diff does not actually show /charge behind a guard, so I removed that false claim while keeping the real BOLA/unauthenticated concern), kept the security_hawk 'tenant isolation' framing of refundsStore as the milder test-bleed/global-state issue it really is, and downgraded the perf 'findAll' items since the repo is in-memory today (the interface footgun is still worth noting). The sort bug, 404-vs-200 bug, vacuous tests, and weak schema validation all survive on their own merits.",
+  "findings": [
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 36,
+      "line_end": 44,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Over-refund guard silently coerces/caps amount instead of rejecting",
+      "message": "When refundAmount > tx.amount the code guesses 'maybe the caller meant dollars', multiplies by 100, and if that still overflows silently caps to tx.amount. Net effect: sending amount: 999999 always yields a full refund, and a legitimate-but-too-large partial refund is silently capped with no error. This is both a correctness bug and a business-logic bypass for money-handling code. Reject amounts greater than the original charge with a 4xx/AppError; resolve the cents-vs-dollars ambiguity at the schema boundary, not heuristically inside the service.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "security_hawk"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 27,
+      "line_end": 33,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Sort by created_at is a no-op \u2014 domain object uses createdAt",
+      "message": "The comparator reads a.created_at / b.created_at, but the Transaction domain object stores the field as createdAt (camelCase). Both sides are undefined for every row, so every comparison returns 0 and the list is never sorted \u2014 directly breaking the PR's stated 'newest-first' guarantee. Fix: mine.sort((a, b) => b.createdAt.localeCompare(a.createdAt)). No test covers sort order, so this ships silently.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/refundsController.ts",
+      "line_start": 20,
+      "line_end": 23,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Returns 200 {} when transaction not found \u2014 should be 404",
+      "message": "When refund() returns null (transaction doesn't exist) the controller responds 200 with an empty body. A 200 tells clients \u2014 including retry/idempotency layers \u2014 that the refund succeeded, and callers cannot distinguish 'refund recorded' from 'transaction never existed'. Return res.status(404).json({ error: 'transaction not found' }). The existing test only asserts status < 500, so it was written to accept this bug.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 42,
+      "line_end": 47,
+      "category": "security",
+      "severity": "should",
+      "title": "card_number field in response is a PAN-leak regression magnet",
+      "message": "The response includes card_number: (tx as unknown as { card_number?: string }).card_number ?? tx.cardLast4. Today the field doesn't exist on Transaction so this resolves to cardLast4 (no PAN leaks now), but the cast-to-unknown + a field literally named card_number is a trap: the first time anyone stores a full PAN on the transaction object it ships to every caller, violating PCI-DSS 3.4. Remove the card_number alias entirely \u2014 card_last4 is the only card identifier that should leave the service.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk",
+          "quality_critic"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/routes.ts",
+      "line_start": 20,
+      "line_end": 21,
+      "category": "security",
+      "severity": "must",
+      "title": "Refund creation and customer history have no authn/authz (BOLA)",
+      "message": "POST /refunds and GET /customers/:id/transactions are registered with no authentication or authorization. Any caller can read any customer's full transaction history by cycling :id (OWASP A01 / BOLA) and can create refunds against any guessed transaction_id. (Note: the diff does not show an auth guard on /charge either, so this may be a service-wide gap rather than a regression \u2014 but these new endpoints expose customer PII and money movement, so they must require an authenticated principal and an ownership check that the principal may view the requested customerId.)",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 15,
+      "line_end": 16,
+      "category": "quality",
+      "severity": "should",
+      "title": "Module-level refundsStore is shared global state \u2014 tests bleed, no isolation",
+      "message": "const refundsStore = {} lives at module scope, so every RefundsService instance writes to the same cached object. Tests call createApp() fresh per case but the store is never reset, so refunds leak across tests; in production it is process-wide global state with no per-instance ownership. Move the store to an instance field (this.store) or inject a store interface so each service gets an isolated namespace. (The 'cross-tenant read' framing is overstated \u2014 listRefundsForTransaction already filters by transactionId \u2014 but the global-state/test-bleed problem is real.)",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "security_hawk"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/services/refundsService.ts",
+      "line_start": 27,
+      "line_end": 27,
+      "category": "standards",
+      "severity": "should",
+      "title": "console.log used instead of pino logger (loses structure + redaction)",
+      "message": "console.log is used in refundsService.ts (line 27 'transaction not found', line 56 'refund created') and in customerHistoryController.ts line 15 ('history requested for customer ...'). All bypass the project's pino logger, losing log levels, the request ID, structured fields, and the redaction allowlist \u2014 and write customer/transaction identifiers to raw stdout (PCI-DSS 10.x). Inject the logger through the constructor like the existing services and log structured fields, e.g. logger.info({ refundId, transactionId, amount }, 'refund created').",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "security_hawk"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/tests/refunds.test.ts",
+      "line_start": 1,
+      "line_end": 39,
+      "category": "test",
+      "severity": "should",
+      "title": "Test assertions are vacuous and miss every negative path",
+      "message": "expect(refund.body).toBeDefined() and expect(res.body).toBeDefined() pass for any non-empty response; expect(refund.status).toBeLessThan(500) accepts 200/201/400/404 and was written around the wrong-200 behaviour. None of these would catch a regression. Add real assertions: refund returns 201 with { refund_id, transaction_id, amount, status }; missing transaction returns 404; a partial refund preserves the requested amount; over-refund is rejected (not capped); history is ordered newest-first across multiple transactions.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/validators/refundSchema.ts",
+      "line_start": 3,
+      "line_end": 6,
+      "category": "quality",
+      "severity": "should",
+      "title": "Refund schema accepts empty IDs and zero/negative/fractional amounts",
+      "message": "transaction_id: z.string() accepts ''; amount: z.number().optional() accepts 0, -500, and 9.99. The service's only guard checks amount > tx.amount, so zero and negative amounts pass straight through and create refund records. Tighten: transaction_id: z.string().min(1), amount: z.number().int().positive().optional().",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 17,
+      "line_end": 25,
+      "category": "performance",
+      "severity": "should",
+      "title": "Load-all-then-filter-in-memory; findAll() encodes the anti-pattern in the interface",
+      "message": "list() calls findAll() to pull every transaction and filters by customerId in JS \u2014 O(total transactions) work and allocation per request regardless of how few rows the customer has. It's invisible on the in-memory store today but becomes an OOM/latency cliff on any real backend, and adding findAll() to the TransactionRepository interface tells every future caller a full-table load is sanctioned. Replace with findByCustomerId(customerId) evaluated at the store level (keyed index now, WHERE customer_id = $1 later) and drop findAll() from the interface.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 35,
+      "line_end": 37,
+      "category": "performance",
+      "severity": "should",
+      "title": "N\u00d7M: full refunds-store scan per transaction in the result set",
+      "message": "For each of N transactions the loop calls enrichTransactionWithRefunds -> listRefundsForTransaction, which scans the entire refundsStore (Object.keys) every time. Total work is N \u00d7 |refundsStore| in the request hot path. Collect transaction IDs first and do a single batched lookup (findByTransactionIds / WHERE transaction_id IN (...)), group by transactionId in memory, and join \u2014 one scan instead of N.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 55,
+      "line_end": 59,
+      "category": "performance",
+      "severity": "suggestion",
+      "title": "No pagination on customer transaction list",
+      "message": "The endpoint returns every matching transaction in one JSON body buffered fully in memory before the first byte is written. A long customer history produces an unbounded response. Accept ?limit (default 50, max 200) and a cursor/page param, return next_cursor in the envelope, and reject over-max page sizes with a 400.",
+      "source": "perf_skeptic",
+      "extra": {
+        "raised_by": [
+          "perf_skeptic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 40,
+      "line_end": 53,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Response mixes snake_case and camelCase",
+      "message": "The enriched response uses snake_case keys (card_last4, customer_id, gateway_reference, created_at, refund_total) while the nested refunds objects and the rest of the API (/charge, /transactions/:id) use camelCase (refundId, transactionId, createdAt). Pick one convention and apply it consistently; the casing confusion is part of what masked the createdAt vs created_at sort bug.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/customerHistoryController.ts",
+      "line_start": 21,
+      "line_end": 21,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "Loose equality (==) used for customerId comparison",
+      "message": "tx.customerId == customerId uses abstract equality while the rest of the codebase uses ===. With typed string IDs this is harmless today, but it drifts from house style and would coerce (e.g. '0' == 0) if IDs ever become numeric. Use ===.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "security_hawk"
+        ],
+        "skeptic": "merged"
+      }
+    }
+  ],
+  "score": {
+    "pr": 2,
+    "totals": {
+      "findings": 14,
+      "issues": 14,
+      "true_positives": 14,
+      "matched_findings": 12,
+      "false_positives": 2,
+      "false_negatives": 0
+    },
+    "metrics": {
+      "precision": 0.8571428571428571,
+      "recall": 1.0,
+      "f1": 0.923076923076923
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-correctness-refund-amount-coercion",
+        "matched_keyword": "dollars"
+      },
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-correctness-refund-no-amount-cap",
+        "matched_keyword": "over-refund"
+      },
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 0,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "camelCase"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr2-correctness-refund-empty-200",
+        "matched_keyword": "200"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card_number"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "module-level"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-quality-module-level-state",
+        "matched_keyword": "inject"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-correctness-zero-amount-refund",
+        "matched_keyword": "amount"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr2-quality-console-log-business-events",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr2-test-passes-for-wrong-reason",
+        "matched_keyword": "toBeDefined"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr2-validation-loose-refund-schema",
+        "matched_keyword": "positive"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-performance-history-in-memory-filter",
+        "matched_keyword": "findAll"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr2-performance-n-plus-one-refund-enrich",
+        "matched_keyword": "loop"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-correctness-broken-sort-cents",
+        "matched_keyword": "sort"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-security-card-pan-in-response",
+        "matched_keyword": "card"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr2-standards-response-naming-snake",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr2-security-customer-id-logged",
+        "matched_keyword": "customer"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr2-performance-history-in-memory-filter",
+      "pr2-performance-n-plus-one-refund-enrich",
+      "pr2-correctness-broken-sort-cents",
+      "pr2-security-card-pan-in-response",
+      "pr2-correctness-refund-amount-coercion",
+      "pr2-correctness-refund-no-amount-cap",
+      "pr2-quality-module-level-state",
+      "pr2-correctness-zero-amount-refund",
+      "pr2-quality-console-log-business-events",
+      "pr2-validation-loose-refund-schema",
+      "pr2-correctness-refund-empty-200",
+      "pr2-test-passes-for-wrong-reason",
+      "pr2-standards-response-naming-snake",
+      "pr2-security-customer-id-logged"
+    ],
+    "unmatched_findings": [
+      4,
+      11
+    ],
+    "unmatched_issue_ids": [],
+    "per_category": {
+      "performance": {
+        "total": 2,
+        "found": 2
+      },
+      "correctness": {
+        "total": 5,
+        "found": 5
+      },
+      "security": {
+        "total": 2,
+        "found": 2
+      },
+      "quality": {
+        "total": 3,
+        "found": 3
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "standards": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 5,
+        "found": 5
+      },
+      "should": {
+        "total": 8,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 1,
+        "found": 1
+      }
+    }
+  },
+  "error": null
+}

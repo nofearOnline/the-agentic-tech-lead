@@ -1,0 +1,464 @@
+{
+  "version": "v4_parallel_personas",
+  "pr": 1,
+  "trial": 2,
+  "title": "Add coupon discount support to charge endpoint",
+  "elapsed_seconds": 2539.557678937912,
+  "cost_usd": 0.5568144,
+  "usage": {
+    "input_tokens": 197,
+    "cache_creation_input_tokens": 10404,
+    "cache_read_input_tokens": 13035,
+    "output_tokens": 10414
+  },
+  "summary": "Started from 24 raw findings across four personas and collapsed them to 14. The high-confidence core is three-way agreement on the PCI-grade card-data leak (console.log of the raw charge body) and the empty money-path catch block, plus two-way agreement on the always-zero discount_amount bug, the unvalidated couponCode, the second debug console.log, the `as any` response, and the doStuff/tmp naming. I kept two single-persona must-fix correctness items the others missed (negative charge from unbounded fixed discount, no floor) and the missing tests. I downgraded kiss_zealot's over-engineering finding from must to should (real but not a merge blocker) and merged its abstract-class-vs-interface point into it. Pruned nothing as outright false \u2014 every claim checks out against the diff \u2014 but merged heavily where personas described the same lines from different angles. Severity calls: card-in-logs, swallowed catch, zero-discount bug, and negative-amount are MUST; everything else is should/suggestion.",
+  "findings": [
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "security",
+      "severity": "must",
+      "title": "console.log dumps full charge body (PAN/CVC) to stdout \u2014 PCI violation",
+      "message": "`console.log('DEBUG charge body:', JSON.stringify(theData))` serializes the entire raw request body \u2014 including card.number and card.cvc \u2014 to stdout before any parsing or redaction. This bypasses the project's pino logger and its redaction allowlist; card data flows to wherever stdout goes (log aggregators, CloudWatch, Splunk). PCI-DSS forbids writing CVC to any log sink. Remove this line entirely. If request tracing is needed, log only non-sensitive identifiers (customerId, amount, currency) through pino after the schema parse.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk",
+          "quality_critic",
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 22,
+      "line_end": 27,
+      "category": "correctness",
+      "severity": "must",
+      "title": "Empty catch swallows coupon errors \u2014 charge silently proceeds at wrong amount",
+      "message": "`catch (e) { // TODO }` discards every exception from `doStuff`. On any throw, `finalAmount` keeps its pre-throw value, `payload.amount` was already mutated to match, the charge fires anyway, and the caller gets a 201 with `discount_amount: 0` and no log trail. Swallowing exceptions on a money path violates fail-closed. Either handle it meaningfully (log via pino + return a 422 for an unresolvable coupon) or let it propagate to the outer handler. An empty TODO catch must not ship on a payment path.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk",
+          "quality_critic",
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 24,
+      "line_end": 37,
+      "category": "correctness",
+      "severity": "must",
+      "title": "discount_amount is always 0 \u2014 amount overwritten before the subtraction",
+      "message": "Line 24 does `payload.amount = finalAmount`, so when line 37 computes `payload.amount - finalAmount` both operands hold the discounted value and the result is always 0. The mutation is also unnecessary \u2014 `finalAmount` already holds the discounted value passed to `charge`. Fix: capture the original first \u2014 `const originalAmount = payload.amount; ... response.discount_amount = originalAmount - finalAmount;` \u2014 and drop the mutation.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 27,
+      "line_end": 29,
+      "category": "correctness",
+      "severity": "must",
+      "title": "FixedCouponStrategy can return a negative amount \u2014 no lower-bound guard",
+      "message": "`return amount - this.amt` has no floor. A 300-cent charge with FIVEOFF (500) returns -200, and because the catch above swallows everything, that negative amount is passed straight to the gateway. Add `Math.max(0, amount - this.amt)` at minimum, or throw a domain error (e.g. DiscountExceedsAmountError) so the caller can return a 422.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 15,
+      "line_end": 16,
+      "category": "security",
+      "severity": "should",
+      "title": "couponCode read from raw body, bypasses Zod, reflected back unvalidated",
+      "message": "`couponCode` is plucked from `req.body` before `chargeSchema.parse` runs and is echoed back verbatim in `response.coupon_code`. The Zod boundary never sees it \u2014 no length cap, no charset constraint \u2014 so an arbitrarily long or crafted string reaches the lookup, the logs, and the client. Add `couponCode: z.string().regex(/^[A-Z0-9]{1,20}$/).optional()` to `chargeSchema` and read it from the validated `payload`, never from the raw body.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "security_hawk"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 57,
+      "line_end": 57,
+      "category": "security",
+      "severity": "should",
+      "title": "Unknown coupon code logged via console.log \u2014 log-injection + bypasses pino",
+      "message": "`console.log('DEBUG: unknown coupon code:', couponCode)` writes a raw, user-supplied string to stdout. With newlines or ANSI/JSON fragments an attacker can poison or spoof log entries, and it bypasses the structured, redacted pino logger. Replace with `logger.warn({ couponCode }, 'unknown coupon')` and enforce the charset/length cap in chargeSchema so an arbitrary string never reaches the sink.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk",
+          "quality_critic"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 29,
+      "line_end": 36,
+      "category": "security",
+      "severity": "should",
+      "title": "`const response: any = transaction` \u2014 untyped passthrough of full transaction to client",
+      "message": "Casting the transaction to `any` and attaching snake_case fields surrenders all compiler knowledge of the object and ships every field `payments.charge` returns straight to the API caller \u2014 potentially gateway tokens or other internal fields that should never cross the boundary. Define an explicit response type and construct it field-by-field (transactionId, amount, currency, discountAmount, couponCode) so the serialization surface is known and intentional.",
+      "source": "security_hawk",
+      "extra": {
+        "raised_by": [
+          "security_hawk",
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 5,
+      "line_end": 52,
+      "category": "kiss",
+      "severity": "should",
+      "title": "Strategy + Factory + abstract class for a 6-row lookup table",
+      "message": "Three classes, an inheritance tree, and a factory dispatch six hard-coded discount rules. The machinery adds zero capability over a plain record plus one function and obscures the logic (the always-zero bug above hid inside it). Note also that `AbstractCouponStrategy` has no shared concrete behavior \u2014 it's an interface in disguise forcing single inheritance. Replace the whole file with a `Record<string, {kind, value}>` lookup and one `applyCoupon(amount, code)` function; reintroduce abstractions when date-bound/customer-specific coupons actually land and their shape is known.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 54,
+      "line_end": 65,
+      "category": "standards",
+      "severity": "should",
+      "title": "Exported `doStuff` plus `tmp`/`result2`/`x`/`p`/`amt` \u2014 meaningless names",
+      "message": "`doStuff` is the public API the controller imports and tells readers nothing. Internals use `tmp`, `result2`, `x`, `p`, `amt`. Rename the function to `applyCouponDiscount`, `tmp` to `strategy`/`handler`, inline `result2` into a direct return, and give the strategy fields meaningful names (`percentOff`, `amountOff`).",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic",
+          "kiss_zealot"
+        ],
+        "skeptic": "merged"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 36,
+      "line_end": 37,
+      "category": "standards",
+      "severity": "should",
+      "title": "Response keys discount_amount / coupon_code break camelCase API contract",
+      "message": "The rest of the charge response uses camelCase (transactionId, customerId). Adding `discount_amount` and `coupon_code` forces every consumer to special-case this endpoint. Rename to `discountAmount` and `couponCode` to match house style.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 16,
+      "line_end": 16,
+      "category": "standards",
+      "severity": "should",
+      "title": "`var` and `==` throughout \u2014 convention drift, likely lint failures",
+      "message": "`var x` (l16), `var tmp` (l58), and the `==` comparisons in `CouponHandlerFactory.build` (l34\u201345) and `if (tmp == null)` (l59) violate the codebase's const/let and `===` conventions and presumably the ESLint config (prefer-const, eqeqeq). Switch to const/let and `===`; if the linter doesn't already catch these, tighten it.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 1,
+      "line_end": 65,
+      "category": "test",
+      "severity": "should",
+      "title": "Zero tests for new money-math and coupon dispatch",
+      "message": "Tests were deferred to a follow-up, but this is money-adjacent branching logic and the follow-up rarely happens. Untested surface includes percentage truncation/rounding, fixed-discount math (the negative-amount case is already broken), all six codes dispatching correctly, the unknown-code fallthrough, and the empty/undefined couponCode early return. Ship unit tests for the discount math and dispatch with this PR, not after.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 15,
+      "line_end": 15,
+      "category": "standards",
+      "severity": "suggestion",
+      "title": "`theData` is a meaningless name for the raw request body",
+      "message": "`const theData = req.body` communicates nothing and reads like a placeholder that escaped review. If you want a name contrasting the unvalidated input with the validated `payload`, call it `rawBody`; otherwise use `req.body` directly.",
+      "source": "quality_critic",
+      "extra": {
+        "raised_by": [
+          "quality_critic"
+        ],
+        "skeptic": "kept"
+      }
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 47,
+      "line_end": 49,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Commented-out FREESHIP branch \u2014 delete it, git remembers",
+      "message": "The dead FREESHIP branch makes every future reader stop to decide whether it's a plan, a rollback, or a fossil. Version history is the backup; delete it.",
+      "source": "kiss_zealot",
+      "extra": {
+        "raised_by": [
+          "kiss_zealot"
+        ],
+        "skeptic": "kept"
+      }
+    }
+  ],
+  "score": {
+    "pr": 1,
+    "totals": {
+      "findings": 14,
+      "issues": 15,
+      "true_positives": 14,
+      "matched_findings": 14,
+      "false_positives": 0,
+      "false_negatives": 1
+    },
+    "metrics": {
+      "precision": 1.0,
+      "recall": 0.9333333333333333,
+      "f1": 0.9655172413793104
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 0,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "schema"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-quality-silent-error-swallow",
+        "matched_keyword": "swallow"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-quality-any-cast",
+        "matched_keyword": "any"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "validate"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr1-quality-debug-log-coupon",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr1-standards-snake-case-response",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr1-quality-any-cast",
+        "matched_keyword": "any"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "factory"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr1-kiss-abstract-class-vs-interface",
+        "matched_keyword": "abstract class"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "doStuff"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-standards-snake-case-response",
+        "matched_keyword": "camelCase"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "factory"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr1-correctness-float-money",
+        "matched_keyword": "rounding"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr1-test-no-tests-added",
+        "matched_keyword": "test"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "validate"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "KISS"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "let"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr1-quality-dead-code-comment",
+        "matched_keyword": "commented"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr1-security-card-pan-logged",
+      "pr1-quality-silent-error-swallow",
+      "pr1-correctness-discount-always-zero",
+      "pr1-standards-snake-case-response",
+      "pr1-correctness-coupon-not-validated",
+      "pr1-kiss-strategy-factory-overengineered",
+      "pr1-correctness-float-money",
+      "pr1-quality-bad-naming",
+      "pr1-standards-var-instead-of-const",
+      "pr1-quality-dead-code-comment",
+      "pr1-test-no-tests-added",
+      "pr1-quality-any-cast",
+      "pr1-kiss-abstract-class-vs-interface",
+      "pr1-quality-debug-log-coupon"
+    ],
+    "unmatched_findings": [],
+    "unmatched_issue_ids": [
+      "pr1-standards-loose-equality"
+    ],
+    "per_category": {
+      "security": {
+        "total": 1,
+        "found": 1
+      },
+      "quality": {
+        "total": 5,
+        "found": 5
+      },
+      "correctness": {
+        "total": 3,
+        "found": 3
+      },
+      "standards": {
+        "total": 3,
+        "found": 2
+      },
+      "kiss": {
+        "total": 2,
+        "found": 2
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 4,
+        "found": 4
+      },
+      "should": {
+        "total": 9,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 2,
+        "found": 2
+      }
+    }
+  },
+  "error": null
+}
