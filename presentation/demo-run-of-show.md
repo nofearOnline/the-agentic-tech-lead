@@ -6,7 +6,7 @@
 
 The demo is the proof layer under the three claims. We don't tour all five versions linearly; we run **three head-to-head diffs**, one per take-home, on the PR that makes the point loudest. **All numbers below are from the completed 45-run matrix** (`presentation/comparison.md`).
 
-> **The data reframed the story — read this first.** The smoke tests implied a clean v1<v2<v3<v4<v5. The full matrix says something sharper: **v3 (bundled personas, one call) is the actual quality winner — F1 0.96 at $0.29 — and v4 (parallel personas + skeptic) costs ~2.1× more ($0.62) for *no* F1 gain (0.94 < 0.96).** So the demo's emotional peak is **v3**, and **v4 is the cautionary tale**, not the climax. This is a *better* talk for tech leads: the lesson is "measure whether the complexity earned its cost," which the data demonstrates live.
+> **The data reframed the story — read this first.** The smoke tests implied a clean v1<v2<v3<v4<v5. The full matrix says something sharper: **v3 (bundled personas, one call) is the actual quality winner — F1 0.96 at $0.29 — and v4 (parallel personas + skeptic) costs ~2.5× more ($0.72) for *lower* F1 (0.92 < 0.96).** So the demo's emotional peak is **v3**, and **v4 is the cautionary tale**, not the climax. This is a *better* talk for tech leads: the lesson is "measure whether the complexity earned its cost," which the data demonstrates live.
 
 ---
 
@@ -73,21 +73,21 @@ Run v3 live on PR#1 — it essentially aces it (**F1 0.99**). Then flash PR#3's 
 
 > "This is the build everyone wants to demo. Four agents in parallel, a principal-engineer skeptic on top. And here's what it actually bought us…"
 
-**Evidence (the matrix) — the gut-punch:** v4 costs **$0.62 (~2.1× v3) and scores no better: F1 0.94 vs v3's 0.96.** More agents, more money, no gain on these PRs. Put the v3 and v4 rows side by side and let the room sit with it.
+**Evidence (the matrix) — the gut-punch:** v4 costs **$0.72 (~2.5× v3) and scores *lower*: F1 0.92 vs v3's 0.96.** More agents, more money, worse result on these PRs. Put the v3 and v4 rows side by side and let the room sit with it.
 
-> "More machinery. Twice the cost. And it didn't do any better. This is the trap — complexity feels like progress. The agentic tech lead's actual job is to *measure* whether it is."
+> "More machinery. 2.5× the cost. And it did *worse*. This is the trap — complexity feels like progress. The agentic tech lead's actual job is to *measure* whether it is."
 
 **The two governance moves:**
 1. **Sometimes the answer is 'don't' — v3 was already the frontier.** That's the headline.
-2. **When you *do* need a v4-shaped build, engineer its cost down (v5).** v5 keeps the multi-agent shape but adds a deterministic pre-phase (gate personas with no surface in the diff; pre-cluster duplicates), tiers models (**Haiku** breadth, **Opus** skeptic only), and an **edit-list skeptic** (Opus emits drop/merge/severity edits, not re-authored prose). Result: **$0.44 (0.71× v4), F1 0.92, and genuinely fast (~155s vs v4's ~700s+).**
+2. **When you *do* need a v4-shaped build, engineer its cost down (v5).** v5 keeps the multi-agent shape but adds a deterministic pre-phase (gate personas with no surface in the diff; pre-cluster duplicates), tiers models (**Haiku** breadth, **Opus** skeptic only), and an **edit-list skeptic** (Opus emits drop/merge/severity edits, not re-authored prose). Result: **$0.44 (0.61× v4), F1 0.92, and genuinely fast (~155s vs v4's ~700s+).**
 
 **Live beat — v5 vs v4 on PR#3:**
 
-> "If you're committed to the multi-agent architecture, v5 is how you make it affordable — 0.71× the cost, ~4–5× faster, same quality band. But notice: v3 still beats both. Cost discipline *and* the humility to not over-build. That's governance."
+> "If you're committed to the multi-agent architecture, v5 is how you make it affordable — 0.61× the cost, ~4–5× faster, same quality band. But notice: v3 still beats both. Cost discipline *and* the humility to not over-build. That's governance."
 
 Honest ceiling note: the literal 7× cost-collapse from the source blog needs prompt-cache prefix sharing across agents, which the CLI seam can't do — an SDK backend can. "Here's exactly where I'd spend the next week."
 
-- v4: **F1 0.94, $0.62, ~700s** · v5: **F1 0.92, $0.44, ~155s** · v3 (still the winner): **F1 0.96, $0.29**.
+- v4: **F1 0.92, $0.72, ~700s** · v5: **F1 0.92, $0.44, ~155s** · v3 (still the winner): **F1 0.96, $0.29**.
 
 ---
 
