@@ -214,5 +214,5 @@
       }
     }
   },
-  "error": null
+  "error": "throttle-casualty: clobbered by an overlapping resumable run during CLI rate-limiting; truncated to 5 findings (F1 0.25 vs clean ~0.90/29-findings). Excluded from stats."
 }

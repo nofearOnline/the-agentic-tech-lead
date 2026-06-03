@@ -603,5 +603,5 @@
       }
     }
   },
-  "error": null
+  "error": "throttle-casualty: re-run under CLI rate-limiting (6241s); truncated to 22 findings (F1 0.79 vs clean ~0.90/29-findings). Excluded from stats."
 }
