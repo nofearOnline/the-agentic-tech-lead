@@ -1,0 +1,682 @@
+{
+  "version": "v4_persona_lite",
+  "pr": 3,
+  "trial": 2,
+  "title": "Add user auth, admin dashboard, and outgoing webhooks",
+  "elapsed_seconds": 79.8284101486206,
+  "cost_usd": 0.0636052,
+  "usage": {
+    "input_tokens": 9,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 31232,
+    "output_tokens": 9136
+  },
+  "summary": "This PR introduces serious security and architectural issues that block merge. The team flagged: (1) production secrets committed to git with .gitignore modified to force them in; (2) hardcoded admin backdoors, broken JWT fallbacks, and email-suffix auth; (3) PCI-DSS violations (CVC/PAN stored, logged, exported to CSV); (4) SSRF-vulnerable webhook fetching; (5) MD5 password hashing and predictable reset tokens; (6) eval-based SQL injection in the userStore; (7) overly complex FakeDb solving for a future that doesn't exist; (8) weak tests that pass regardless of correctness; (9) @ts-nocheck disabling type safety on critical auth code. The security issues alone are non-negotiable blockers. The architectural issues (eval SQL, speculative filters, over-engineering) should be addressed before this lands.",
+  "findings": [
+    {
+      "file": "payments-service/.env",
+      "line_start": 1,
+      "line_end": 6,
+      "category": "security",
+      "severity": "must",
+      "title": "Production secrets committed to git",
+      "message": "JWT_SECRET, ADMIN_API_KEY, and PAYMENT_GATEWAY_LIVE_KEY are hardcoded in a committed .env file. These are compromised forever once in git history. Rotate all three immediately. Secrets belong in a secret manager (AWS Secrets Manager, HashiCorp Vault, etc.) injected at runtime, never in version control. Even a hypothetical 'these are dummy values' comment doesn't justify this pattern \u2014 the diff shows production-looking keys.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/.gitignore",
+      "line_start": 5,
+      "line_end": 7,
+      "category": "security",
+      "severity": "must",
+      "title": ".gitignore modified to opt .env into version control",
+      "message": "The change removes `.env` from the exclusion and adds `!.env` to force-include it. This explicitly opts secrets into source control. Remove the `!.env` line entirely and delete the committed .env file from git history (git filter-branch or similar). The comment justifies this as 'for staging' \u2014 staging should use the same secret injection mechanism as prod.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/jwt.ts",
+      "line_start": 1,
+      "line_end": 5,
+      "category": "security",
+      "severity": "must",
+      "title": "JWT_SECRET falls back to hardcoded dev secret if env var missing",
+      "message": "Line 3: `const SECRET = process.env.JWT_SECRET || 'dev-secret-123';` means if JWT_SECRET is not set, the app silently uses a known dev secret. A misconfigured pod or one missing the env var will issue forgeable tokens. The secret must be required at startup; throw if missing, don't fall back.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/jwt.ts",
+      "line_start": 15,
+      "line_end": 18,
+      "category": "security",
+      "severity": "must",
+      "title": "Hardcoded master admin key in token verification",
+      "message": "Lines 15\u201318: if a token equals the literal string 'admin-master-key', the function returns admin credentials. This is a backdoor \u2014 anyone who knows this string (or reads this code) gains admin access. Delete this branch entirely. There is no scenario where a backdoor is appropriate; if you need to test admin flows, use proper token generation.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/jwt.ts",
+      "line_start": 26,
+      "line_end": 28,
+      "category": "security",
+      "severity": "must",
+      "title": "Reset token uses Math.random() instead of CSPRNG",
+      "message": "Line 27: `Math.random()` is not cryptographically secure; reset tokens become guessable. Use `crypto.randomBytes(32).toString('hex')` instead. Combined with the predictable Date.now() component, an attacker can easily enumerate valid reset tokens.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/passwordHash.ts",
+      "line_start": 1,
+      "line_end": 9,
+      "category": "security",
+      "severity": "must",
+      "title": "MD5 password hashing without salt or work factor",
+      "message": "MD5 is unsalted and instantly rainbow-tabled. Password hashing requires a work factor (bcrypt, argon2, scrypt). Use `bcrypt.hash(password, 12)` and `bcrypt.compare()` for verification. This is the minimum bar for production auth systems.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/userStore.ts",
+      "line_start": 1,
+      "line_end": 1,
+      "category": "security",
+      "severity": "must",
+      "title": "@ts-nocheck disables type safety on code with eval injection",
+      "message": "The `@ts-nocheck` pragma at the top of this file blankets the entire auth store, including the `evalWhere` function on line 54 which calls `eval()` on user-supplied WHERE clauses. This disables the compiler's ability to catch unsafe patterns. Remove `@ts-nocheck` and refactor the FakeDb to not use eval (see 'kiss_zealot' findings for architecture).",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/userStore.ts",
+      "line_start": 51,
+      "line_end": 67,
+      "category": "security",
+      "severity": "must",
+      "title": "eval() on user-supplied WHERE clause is injection vulnerability",
+      "message": "The `evalWhere` function (lines 51\u201367) takes a WHERE clause string, performs regex replacements, and calls `eval()` on it. An attacker can inject arbitrary JavaScript expressions. For example, `findUserByEmail` calls `db.query()` with user input: `SELECT * FROM users WHERE email='${email}'` (line 84) \u2014 if email contains a quote and an eval-able expression, it breaks out. This is OWASP A03 (injection). Refactor to a proper filter function or whitelist, never eval.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/authMiddleware.ts",
+      "line_start": 8,
+      "line_end": 12,
+      "category": "security",
+      "severity": "must",
+      "title": "adminBypass query parameter grants admin access",
+      "message": "Lines 8\u201312: `if (req.query.adminBypass === '1') { req.user = { ... role: 'admin' }; return next(); }` allows any request with `?adminBypass=1` to become an admin. This is a backdoor, not a debug feature. Remove it entirely. If you need admin test tokens for testing, generate them properly with the JWT signing function in a test helper, never with a query param.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/authMiddleware.ts",
+      "line_start": 31,
+      "line_end": 37,
+      "category": "security",
+      "severity": "must",
+      "title": "Email domain used as authorization boundary",
+      "message": "Lines 31\u201337 check `email.endsWith('@admin.com')` or `@honeybook.com` to grant admin. Email is not an identity \u2014 anyone who controls an address matching that domain (or spoofs the claim if the JWT is leaked) becomes admin. Move admin status to a proper claims field in the JWT (set server-side during login, not user-supplied). The email domain can be a hint, not the security boundary.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/authController.ts",
+      "line_start": 28,
+      "line_end": 32,
+      "category": "security",
+      "severity": "must",
+      "title": "Register response leaks password_hash",
+      "message": "Lines 30\u201331: the register response includes `password_hash: user.password_hash` in the JSON. The hash is the crown jewel of the user account \u2014 never serialize it. Remove this field from the response.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/authController.ts",
+      "line_start": 16,
+      "line_end": 16,
+      "category": "security",
+      "severity": "must",
+      "title": "Register request body logged with console.log",
+      "message": "Line 16: `console.log('register request:', JSON.stringify(req.body));` logs the request body, which may contain the user's password in plaintext. Use the injected `logger` with structured fields and redaction allowlists, never console.log. (Also, this logs on every registration, cluttering the console.)",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/authController.ts",
+      "line_start": 41,
+      "line_end": 50,
+      "category": "security",
+      "severity": "must",
+      "title": "Login endpoint enables email enumeration (404 vs 401)",
+      "message": "Lines 42\u201344: `if (!user) return 404 'no user with that email'`, else line 48: `if (!password correct) return 401`. An attacker can enumerate valid account emails by observing distinct status codes. Return a uniform 401 for both cases (e.g., 'invalid credentials'), and log the distinction server-side for your own debugging.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/paymentsService.ts",
+      "line_start": 37,
+      "line_end": 44,
+      "category": "security",
+      "severity": "must",
+      "title": "PAN and CVC persisted in transaction object (PCI-DSS violation)",
+      "message": "Lines 37\u201344: the transaction object now carries `card_number` and `cvc` fields populated from the input. PCI-DSS forbids persisting CVC anywhere, ever. PAN (card_number) must be tokenized or encrypted, never stored plaintext. The gateway response should return only the last 4 digits and a token; don't reach back into the input card to populate the transaction. This transaction gets logged, exported, and sent to webhooks \u2014 all PCI violations.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/paymentsService.ts",
+      "line_start": 52,
+      "line_end": 52,
+      "category": "security",
+      "severity": "must",
+      "title": "Full transaction with PAN/CVC logged to console",
+      "message": "Line 52: `console.log('charge processed', JSON.stringify(transaction));` logs the entire transaction, now including card_number and CVC (from the lines above). This violates PCI-DSS and exposes sensitive data to stdout. (1) Don't log the full transaction, especially PCI data. (2) Use the pino logger with redaction rules, not console.log.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/adminService.ts",
+      "line_start": 47,
+      "line_end": 62,
+      "category": "security",
+      "severity": "must",
+      "title": "CSV export includes PAN in plaintext",
+      "message": "Lines 47\u201362: `exportTransactionsCsv()` exports all transactions to CSV with `tx.card_number ?? ''`. This exports PAN to a file that could be downloaded, logged, or cached. Never include card data in exports. If you need to export transaction data, redact or omit card fields entirely.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/adminService.ts",
+      "line_start": 1,
+      "line_end": 1,
+      "category": "security",
+      "severity": "must",
+      "title": "@ts-nocheck disables type safety on code with new Function()",
+      "message": "The `@ts-nocheck` pragma at the top of this file disables type checking on `listAllTransactions` (line 14), which builds code dynamically with `new Function()`. This is similar to eval and is a code injection vector. Remove @ts-nocheck and refactor to not use new Function (see 'kiss_zealot' findings).",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/adminService.ts",
+      "line_start": 12,
+      "line_end": 24,
+      "category": "security",
+      "severity": "must",
+      "title": "Admin filter expressions executed via new Function()",
+      "message": "Lines 12\u201324: `listAllTransactions` accepts a filter parameter and builds a function with `new Function('tx', 'return (' + filterExpr + ')')`. While this is less egregious than eval, it's still dynamic code execution and can be abused (e.g., `filterExpr='tx.customerId; process.exit(1)` or similar). Admins are trusted, but the interface invites misuse. Replace with a whitelist of allowed filter operators or a proper query DSL.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/webhooksService.ts",
+      "line_start": 28,
+      "line_end": 46,
+      "category": "security",
+      "severity": "must",
+      "title": "SSRF vulnerability: unvalidated webhook URLs, redirect follow",
+      "message": "Lines 28\u201346: `fireForTransaction` POSTs to `hook.url` (user-supplied) with `redirect: 'follow'`. An attacker registers a webhook URL like `http://169.254.169.254/...` (cloud metadata), `http://localhost:6379` (redis), or similar, and the service will make requests to internal hosts. Also, following redirects can amplify this. Validate the URL: whitelist protocols (https only in prod), reject private/link-local ranges, and never follow redirects. Alternatively, enqueue this work to a background job with timeouts and rate limits so one slow/internal webhook doesn't stall the charge response.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/app.ts",
+      "line_start": 36,
+      "line_end": 36,
+      "category": "security",
+      "severity": "must",
+      "title": "CORS misconfigured: wildcard origin with credentials=true",
+      "message": "Line 36: `cors({ origin: '*', credentials: true })` allows any origin to access this API with credentials. This defeats the same-origin policy and lets any website make authenticated requests on behalf of logged-in users. Use an explicit allowlist for trusted origins: `cors({ origin: ['https://app.example.com'], credentials: true })`. If you need to serve any origin, do not set `credentials: true`.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/app.ts",
+      "line_start": 37,
+      "line_end": 37,
+      "category": "performance",
+      "severity": "should",
+      "title": "JSON body limit raised globally without justification",
+      "message": "Line 37: `express.json({ limit: '5mb' })` raises the limit from 64kb to 5mb for all endpoints. The PR says 'so large CSV exports / admin payloads work' \u2014 but (1) CSV exports are responses, not requests, and (2) this limit now applies to every endpoint (register, login, charge, etc.). If one specific admin endpoint needs a larger payload, apply the limit only to that route. A 5mb global limit is a cheap DoS vector: an attacker makes 100 reqs \u00d7 5mb = 500mb memory/bandwidth.",
+      "source": "perf_skeptic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/adminService.ts",
+      "line_start": 45,
+      "line_end": 62,
+      "category": "performance",
+      "severity": "should",
+      "title": "CSV export unbounded: no pagination, no streaming",
+      "message": "Lines 45\u201362: `exportTransactionsCsv()` calls `findAll()` to load every transaction into memory, builds a string, and returns it. With millions of transactions, this OOMs the pod. Streams the CSV in chunks (Node.js streams or a generator pattern) and send it to the response as it builds, or add a LIMIT/pagination. For a real data volume, this is a latent outage.",
+      "source": "perf_skeptic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/authMiddleware.ts",
+      "line_start": 31,
+      "line_end": 37,
+      "category": "quality",
+      "severity": "should",
+      "title": "Duplicated admin authorization check in every admin controller method",
+      "message": "Lines 31\u201337 define a `requireAdmin` middleware, but every admin controller method (listUsers, listTransactions, stats, exportCsv in adminController.ts) repeats the same email-domain check inline. You've already defined the middleware; use it on the routes in routes.ts instead of checking in every handler. Deduplication prevents drift when the authz rule changes.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/adminController.ts",
+      "line_start": 9,
+      "line_end": 20,
+      "category": "quality",
+      "severity": "should",
+      "title": "Duplicated authorization logic in four controller methods",
+      "message": "Lines 9\u201320, and identical blocks in listTransactions, stats, exportCsv: each checks the same email domain. Extract to the requireAdmin middleware (already defined in authMiddleware.ts, lines 31\u201337) and apply it on the routes. Right now the check is copy-pasted four times; if the rule changes, you update four places and forget one.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/webhooksService.ts",
+      "line_start": 38,
+      "line_end": 44,
+      "category": "quality",
+      "severity": "should",
+      "title": "Webhook delivery failures silently swallowed",
+      "message": "Lines 38\u201344: webhook delivery errors (network failures, timeouts) are caught, logged to console (not the pino logger), and discarded. The charge endpoint awaits this, so a hung webhook stalls the charge response. (1) Use the pino logger. (2) Don't await webhook delivery in the hot path \u2014 enqueue it to a background job so charge latency doesn't include webhook latency. (3) Retries should be out-of-band, not on the request thread.",
+      "source": "perf_skeptic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/webhooksService.ts",
+      "line_start": 28,
+      "line_end": 31,
+      "category": "quality",
+      "severity": "should",
+      "title": "Webhook delivery synchronous in the charge hot path",
+      "message": "Lines 28\u201331 (and called from paymentsService.ts line 65): `fireForTransaction` is awaited during the charge request. Any slow, hung, or failed webhook endpoint now increases charge latency. One slow subscriber stalls all charges. Enqueue this to a queue (Bull, RabbitMQ, etc.) so the charge returns immediately and webhooks fire out-of-band.",
+      "source": "perf_skeptic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/authController.ts",
+      "line_start": 5,
+      "line_end": 30,
+      "category": "quality",
+      "severity": "should",
+      "title": "register response includes password_hash; login does not",
+      "message": "Line 30\u201331: register returns `user: { id, email, role, password_hash }` but login (line 53) returns `user: { id, email, role }`. Inconsistent contract; clients expect the same shape from both endpoints. (Also, password_hash should never be in either response \u2014 see security finding above.)",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/tests/auth.test.ts",
+      "line_start": 5,
+      "line_end": 24,
+      "category": "quality",
+      "severity": "should",
+      "title": "Auth tests only assert on response existence, not correctness",
+      "message": "Lines 5\u201324: tests only check `expect(res.status).toBe(201)` and `expect(res.body.token).toBeDefined()`. They don't verify: (1) the token is valid (could be garbage), (2) the user data returned is correct, (3) login fails with wrong password, (4) register fails with duplicate email, (5) the token can be used on a protected endpoint. A test that only checks 'something came back' is green regardless of whether the feature works. Add assertions for the actual contract and error paths.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/userStore.ts",
+      "line_start": 13,
+      "line_end": 68,
+      "category": "kiss",
+      "severity": "should",
+      "title": "Over-engineered FakeDb with eval SQL parsing is YAGNI",
+      "message": "Lines 13\u201368: the entire FakeDb class emulates a SQL engine (loose SELECT/INSERT/DELETE parsing with eval-based WHERE evaluation). This solves for 'we might want to swap Postgres in later' \u2014 but (1) you haven't done it yet, (2) it's solving the problem in the worst possible way (eval injection), and (3) when you do migrate, you'll rewrite all the call sites anyway because the abstraction isn't tight. For a demo/test app, use a simple in-memory map: `users: Map<email, user>` and a `findByEmail(email)` method. No eval, no injection, no false promise of 'swappability'.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/auth/userStore.ts",
+      "line_start": 75,
+      "line_end": 92,
+      "category": "kiss",
+      "severity": "should",
+      "title": "User queries use SQL string templates, inviting injection",
+      "message": "Lines 75, 84, 91: queries like `SELECT * FROM users WHERE email='${email}'` use template literals to build SQL. Even though the 'SQL' is not real, this pattern trains developers to write injection-vulnerable code. When you migrate to a real DB, these patterns will already be baked in. Use parameterized/prepared APIs from day one, or at least never interpolate user input into query strings. For a fake DB, pass a filter object or callback instead: `findByEmail(email)` with no SQL string at all.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/adminService.ts",
+      "line_start": 5,
+      "line_end": 9,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Speculative generality: admin filter expressions",
+      "message": "Lines 5\u20139 and the `listAllTransactions` method accept arbitrary filter expressions ('power-users want to filter'). This is YAGNI \u2014 you haven't received a feature request for it, and it opens a security surface (eval). Build the concrete thing: return all transactions, let the caller filter in memory if needed, or add a single well-defined filter param (e.g., `?status=failed`). When a real second request comes, add that feature then; until then, keep it simple.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/webhooksController.ts",
+      "line_start": 8,
+      "line_end": 18,
+      "category": "quality",
+      "severity": "suggestion",
+      "title": "Webhook URL not validated (could be javascript:, file://, etc.)",
+      "message": "Lines 8\u201318: the register endpoint checks that `url` is a string and exists, but doesn't validate it's a real URL (could be `javascript:alert(1)`, `file:///etc/passwd`, etc.). Use URL constructor to parse it: `try { new URL(url); } catch { ... }` and optionally whitelist the protocol to https only.",
+      "source": "security_hawk",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 3,
+    "totals": {
+      "findings": 32,
+      "issues": 33,
+      "true_positives": 29,
+      "matched_findings": 29,
+      "false_positives": 3,
+      "false_negatives": 4
+    },
+    "metrics": {
+      "precision": 0.90625,
+      "recall": 0.8787878787878788,
+      "f1": 0.8923076923076922
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr3-security-env-committed",
+        "matched_keyword": ".env"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr3-security-gitignore-override-env",
+        "matched_keyword": ".gitignore"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr3-security-jwt-secret-fallback",
+        "matched_keyword": "hardcoded"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr3-security-master-key-backdoor",
+        "matched_keyword": "hardcoded"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr3-security-master-key-backdoor",
+        "matched_keyword": "admin-master-key"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr3-security-predictable-reset-token",
+        "matched_keyword": "Math.random"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr3-security-md5-password-hash",
+        "matched_keyword": "md5"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr3-security-ts-nocheck",
+        "matched_keyword": "@ts-nocheck"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr3-security-eval-in-where-clause",
+        "matched_keyword": "eval"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr3-security-sql-injection-insert",
+        "matched_keyword": "injection"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr3-correctness-fakedb-delete-no-where",
+        "matched_keyword": "WHERE"
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr3-security-admin-bypass-query-flag",
+        "matched_keyword": "adminBypass"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr3-security-admin-by-email-suffix",
+        "matched_keyword": "email"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr3-security-plaintext-password-logged",
+        "matched_keyword": "password"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr3-security-password-hash-in-response",
+        "matched_keyword": "password_hash"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr3-security-plaintext-password-logged",
+        "matched_keyword": "plaintext"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr3-quality-controller-logs-pii",
+        "matched_keyword": "email enumeration"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr3-security-user-enumeration",
+        "matched_keyword": "enumeration"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr3-security-store-pan-cvc",
+        "matched_keyword": "PAN"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr3-security-charge-logs-card",
+        "matched_keyword": "card"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr3-security-store-pan-cvc",
+        "matched_keyword": "PAN"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr3-security-charge-logs-card",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 15,
+        "issue_id": "pr3-security-csv-exports-pan",
+        "matched_keyword": "CSV"
+      },
+      {
+        "finding_index": 17,
+        "issue_id": "pr3-security-admin-filter-eval",
+        "matched_keyword": "new Function"
+      },
+      {
+        "finding_index": 18,
+        "issue_id": "pr3-security-webhook-ssrf",
+        "matched_keyword": "SSRF"
+      },
+      {
+        "finding_index": 19,
+        "issue_id": "pr3-security-cors-wildcard-credentials",
+        "matched_keyword": "CORS"
+      },
+      {
+        "finding_index": 20,
+        "issue_id": "pr3-security-json-body-5mb",
+        "matched_keyword": "5mb"
+      },
+      {
+        "finding_index": 21,
+        "issue_id": "pr3-security-csv-exports-pan",
+        "matched_keyword": "CSV"
+      },
+      {
+        "finding_index": 21,
+        "issue_id": "pr3-perf-admin-no-pagination",
+        "matched_keyword": "pagination"
+      },
+      {
+        "finding_index": 22,
+        "issue_id": "pr3-security-admin-by-email-suffix",
+        "matched_keyword": "email"
+      },
+      {
+        "finding_index": 23,
+        "issue_id": "pr3-dry-admin-role-check-duplicated",
+        "matched_keyword": "duplicate"
+      },
+      {
+        "finding_index": 26,
+        "issue_id": "pr3-security-plaintext-password-logged",
+        "matched_keyword": "password"
+      },
+      {
+        "finding_index": 26,
+        "issue_id": "pr3-security-password-hash-in-response",
+        "matched_keyword": "password_hash"
+      },
+      {
+        "finding_index": 27,
+        "issue_id": "pr3-test-auth-tests-shallow",
+        "matched_keyword": "test"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr3-security-eval-in-where-clause",
+        "matched_keyword": "eval"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr3-security-sql-injection-insert",
+        "matched_keyword": "injection"
+      },
+      {
+        "finding_index": 28,
+        "issue_id": "pr3-correctness-fakedb-delete-no-where",
+        "matched_keyword": "DELETE"
+      },
+      {
+        "finding_index": 29,
+        "issue_id": "pr3-security-eval-in-where-clause",
+        "matched_keyword": "injection"
+      },
+      {
+        "finding_index": 29,
+        "issue_id": "pr3-security-sql-injection-insert",
+        "matched_keyword": "injection"
+      },
+      {
+        "finding_index": 29,
+        "issue_id": "pr3-security-find-user-logs-sql",
+        "matched_keyword": "email"
+      },
+      {
+        "finding_index": 29,
+        "issue_id": "pr3-security-listusers-arbitrary-filter",
+        "matched_keyword": "filter"
+      },
+      {
+        "finding_index": 30,
+        "issue_id": "pr3-security-admin-filter-eval",
+        "matched_keyword": "eval"
+      },
+      {
+        "finding_index": 30,
+        "issue_id": "pr3-perf-admin-no-pagination",
+        "matched_keyword": "memory"
+      },
+      {
+        "finding_index": 31,
+        "issue_id": "pr3-security-webhook-no-url-validation",
+        "matched_keyword": "protocol"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr3-security-env-committed",
+      "pr3-security-gitignore-override-env",
+      "pr3-security-jwt-secret-fallback",
+      "pr3-security-master-key-backdoor",
+      "pr3-security-predictable-reset-token",
+      "pr3-security-md5-password-hash",
+      "pr3-security-ts-nocheck",
+      "pr3-security-eval-in-where-clause",
+      "pr3-security-sql-injection-insert",
+      "pr3-security-find-user-logs-sql",
+      "pr3-security-listusers-arbitrary-filter",
+      "pr3-security-admin-bypass-query-flag",
+      "pr3-security-admin-by-email-suffix",
+      "pr3-dry-admin-role-check-duplicated",
+      "pr3-security-webhook-ssrf",
+      "pr3-security-store-pan-cvc",
+      "pr3-security-charge-logs-card",
+      "pr3-security-admin-filter-eval",
+      "pr3-security-csv-exports-pan",
+      "pr3-security-cors-wildcard-credentials",
+      "pr3-security-json-body-5mb",
+      "pr3-test-auth-tests-shallow",
+      "pr3-quality-controller-logs-pii",
+      "pr3-security-plaintext-password-logged",
+      "pr3-security-password-hash-in-response",
+      "pr3-security-user-enumeration",
+      "pr3-correctness-fakedb-delete-no-where",
+      "pr3-security-webhook-no-url-validation",
+      "pr3-perf-admin-no-pagination"
+    ],
+    "unmatched_findings": [
+      16,
+      24,
+      25
+    ],
+    "unmatched_issue_ids": [
+      "pr3-security-jwt-no-algorithm-pin",
+      "pr3-perf-webhook-sync-in-charge",
+      "pr3-quality-webhook-fire-no-auth",
+      "pr3-security-jwt-no-expiry"
+    ],
+    "per_category": {
+      "security": {
+        "total": 28,
+        "found": 25
+      },
+      "dry": {
+        "total": 1,
+        "found": 1
+      },
+      "performance": {
+        "total": 2,
+        "found": 1
+      },
+      "test": {
+        "total": 1,
+        "found": 1
+      },
+      "correctness": {
+        "total": 1,
+        "found": 1
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 26,
+        "found": 23
+      },
+      "should": {
+        "total": 7,
+        "found": 6
+      }
+    }
+  },
+  "error": null
+}

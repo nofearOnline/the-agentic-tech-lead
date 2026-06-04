@@ -4,18 +4,19 @@
 **Audience:** tech leads, mixed seniority
 **Spine:** three take-homes — **Teach · Compose · Govern** — each = *claim → evidence → how to implement → live benchmark beat*.
 
-The demo is the proof layer under the three claims. We don't tour all five versions linearly; we run **three head-to-head diffs**, one per take-home, on the PR that makes the point loudest. **All numbers below are from the completed 45-run matrix** (`presentation/comparison.md`).
+The demo is the proof layer under the three claims. It's a **4-rung ladder** — **v1** single-shot → **v2** repo-aware → **v3** persona-bundle → **v4** persona-bundle-made-cheap — run as head-to-head diffs on the PR that makes each point loudest. **All numbers below are from the benchmark matrix** (`presentation/comparison.md`).
 
-> **The data reframed the story — read this first.** The smoke tests implied a clean v1<v2<v3<v4<v5. The full matrix says something sharper: **v3 (bundled personas, one call) is the actual quality winner — F1 0.96 at $0.29 — and v4 (parallel personas + skeptic) costs ~2.5× more ($0.72) for *lower* F1 (0.92 < 0.96).** So the demo's emotional peak is **v3**, and **v4 is the cautionary tale**, not the climax. This is a *better* talk for tech leads: the lesson is "measure whether the complexity earned its cost," which the data demonstrates live.
+> **The shape of the story.** v1 is the baseline. v2 *trades* breadth for repo-grounding (Teach). v3 bundles four reviewer personas into one call and **wins the matrix: F1 0.96 at $0.29** (Compose). Then the punchline: **v4 is v3 with one knob changed — the model dialed Sonnet → Haiku.** It lands **F1 0.88 at $0.066** (~4× cheaper than v3), *still* catches the JWT/SSRF security class on the cheap model, and the cost/quality frontier collapses to just **{v4, v3} — the same architecture twice.** Closing line: *composition is the value; the model tier is just the dial — so build your own personas and always measure.* (We also tried spending the *other* direction — parallel agents + a skeptic — it cost ~2.5× more and scored lower; that's an optional aside / appendix, not a rung.)
 
 ---
 
 ## Pre-flight (before you present — do NOT do live)
 
-- [ ] Matrix already run; `presentation/comparison.md` numbers memorized for the three beats.
+- [ ] Matrix already run; `presentation/comparison.md` numbers memorized for the beats.
 - [ ] Terminal A: `pr-agent/` with `.venv` active, font size cranked, scrollback cleared.
 - [ ] Terminal B: the three target PR diffs open in tabs (`gh pr diff 1|2|3`).
-- [ ] **Pre-warm or pre-record v4.** A live v4 run on PR#3 is ~12 min (5 sequential calls incl. Opus) and ~$1.15 — too slow for the stage, and the CLI can rate-limit it into *hours*. Run it beforehand and replay the saved `trial-*.json`, or show a recording. Only v1/v2/v3/v5 are fast enough to run truly live.
+- [ ] **All four ladder rungs run live.** v1/v2/v3/v4 each take ~1–3 min. **v4 is the fastest (~80s, ~$0.07, single Haiku call)** and is the live closer.
+- [ ] *Optional appendix only:* if you plan to show the "spend up" aside, **pre-record the parallel+skeptic build** — a live run on PR#3 is ~12 min and ~$1.15 and the CLI can rate-limit it into *hours*. Never run it live; replay the saved `trial-*.json`.
 - [ ] `compare.py` output piped to a clean pager / rendered table ready to flash.
 - [ ] One backup terminal recording of every beat in case Wi-Fi/network dies on stage.
 
@@ -56,7 +57,7 @@ Run v2 live. Show a context-dependent catch (console.log vs pino, naming). Then 
 
 **Evidence (the matrix):** v3 bundles all four personas into *one* call and **tops the entire matrix: F1 0.96, recall 0.97, for $0.29.** The cleanest proof is the JWT issue class — `jwt-secret-fallback` and `jwt-no-algorithm-pin` go **0/3 for v1 and v2 → 3/3 for v3.** The security-hawk persona reliably surfaces a whole category the generalist never raises. *This is the emotional peak of the talk.*
 
-**How to implement:** load each persona as a profile, concatenate into one system prompt, one call. (The parallel-agents version is the next beat — and it's where the cautionary tale lives.)
+**How to implement:** load each persona as a profile, concatenate into one system prompt, one call. (Splitting them into parallel agents + a skeptic is the tempting "next step" — we tried it; it lost. Appendix.)
 
 **Live beat — v3 on PR#1 (and glance at PR#3):**
 Run v3 live on PR#1 — it essentially aces it (**F1 0.99**). Then flash PR#3's heatmap rows for the JWT issues: red for v1/v2, green for v3.
@@ -67,35 +68,34 @@ Run v3 live on PR#1 — it essentially aces it (**F1 0.99**). Then flash PR#3's 
 
 ---
 
-## Beat 3 — GOVERN (≈7 min) · *"The job isn't building the most agents. It's knowing which complexity earns its cost."*
+## Beat 3 — GOVERN (≈6 min) · *"The job isn't building the most agents. It's finding the knee, then dialing the model — not the agent count."*
 
-**The setup (v4, the cautionary tale):** The obvious "next step" after v3 is the impressive one — split the personas into *parallel* agents and add an **Opus skeptic** to merge and prune. It *looks* like the most sophisticated build. Run/replay v4 and let the numbers land:
+**Claim:** Once you've found the architecture that wins (v3), governance is a *cost* question, and the right lever is the **model tier**, not more orchestration. Keep the personas; dial the model down.
 
-> "This is the build everyone wants to demo. Four agents in parallel, a principal-engineer skeptic on top. And here's what it actually bought us…"
+**Live beat — v4 on PR#3 (run it LIVE; this is the closer):**
+v4 is v3 with one knob changed: the bundled-persona call runs on **Haiku** instead of Sonnet. ~80 seconds, ~7 cents. While it runs, predict aloud: "watch it *still* catch the JWT secret fallback — the bug the diff-only reviewer in Beat 0 was blind to."
 
-**Evidence (the matrix) — the gut-punch:** v4 costs **$0.72 (~2.5× v3) and scores *lower*: F1 0.92 vs v3's 0.96.** More agents, more money, worse result on these PRs. Put the v3 and v4 rows side by side and let the room sit with it.
+**Evidence (the matrix):** v4 lands **F1 0.88 at $0.066 — ~4× cheaper than v3** — and the heatmap proves the win is the *architecture*, not the spend: on Haiku it still goes **3/3 on `jwt-secret-fallback`** (v1/v2 on Sonnet: 0/3) and even **3/3 on the webhook SSRF issue v3-on-Sonnet mostly misses (1/3)**. On the hardest PR it nearly ties v3 (0.89 vs 0.91) at **1/6 the cost**. v4 also **dominates v1**: same F1 (0.88), half the cost, plus a path to the security class v1 can't see.
 
-> "More machinery. 2.5× the cost. And it did *worse*. This is the trap — complexity feels like progress. The agentic tech lead's actual job is to *measure* whether it is."
+> "Same four personas. One model tier down. It still sees the security class the generic reviewer never will — because the *composition* is doing the work, not the expensive model. The frontier is just two points, v4 and v3, and they're the same design. You're not choosing an architecture anymore; you're choosing a budget."
 
-**The two governance moves:**
-1. **Sometimes the answer is 'don't' — v3 was already the frontier.** That's the headline.
-2. **When you *do* need a v4-shaped build, engineer its cost down (v5).** v5 keeps the multi-agent shape but adds a deterministic pre-phase (gate personas with no surface in the diff; pre-cluster duplicates), tiers models (**Haiku** breadth, **Opus** skeptic only), and an **edit-list skeptic** (Opus emits drop/merge/severity edits, not re-authored prose). Result: **$0.44 (0.61× v4), F1 0.92, and genuinely fast (~155s vs v4's ~700s+).**
+**Be honest about the tax:** Haiku is more stochastic on small diffs (PR#1 swung F1 0.62↔0.97). For a budget deploy you'd run best-of-n (still cheaper than one v3 call) or a deterministic false-positive guard. Say it out loud — it's the credible version.
 
-**Live beat — v5 vs v4 on PR#3:**
+**Optional 60-sec aside (the road not taken):** "The tempting move after v3 is to spend *up* — parallel persona agents, an Opus skeptic to merge them. We built it. It cost ~2.5× v3 and scored *lower* (F1 0.92). Even the cost-optimized version of it lost to v3. More agents felt like progress; the data said otherwise. That's the whole reason we measure." (Replay only — never run live; numbers in the appendix of `comparison.md`.)
 
-> "If you're committed to the multi-agent architecture, v5 is how you make it affordable — 0.61× the cost, ~4–5× faster, same quality band. But notice: v3 still beats both. Cost discipline *and* the humility to not over-build. That's governance."
-
-Honest ceiling note: the literal 7× cost-collapse from the source blog needs prompt-cache prefix sharing across agents, which the CLI seam can't do — an SDK backend can. "Here's exactly where I'd spend the next week."
-
-- v4: **F1 0.92, $0.72, ~700s** · v5: **F1 0.92, $0.44, ~155s** · v3 (still the winner): **F1 0.96, $0.29**.
+- **v4: F1 0.88, $0.066** (cheap frontier point) · v3: **F1 0.96, $0.29** (quality knee). Archived "spend up" builds: parallel+skeptic 0.92/$0.72, tiered 0.92/$0.44 — both dominated.
 
 ---
 
-## Beat 4 — The one slide that ties it together (≈1-2 min)
+## Beat 4 — The one slide that ties it together + the call to action (≈2-3 min)
 
-Flash the per-version rollup and the cost-vs-recall scatter from `presentation/comparison.md`. Trace the Pareto frontier with your finger: v1 (cheap floor) → **v3 (the knee — best F1, near-cheapest)** → v4 (expensive corner, buys nothing) → v5 (v4 made affordable).
+Flash the cost-vs-F1 scatter from `presentation/comparison.md` and trace the frontier with your finger — it collapses to **two points, and they're the same architecture**: **v4** (cheap corner, $0.066 / F1 0.88) and **v3** (the knee, $0.29 / F1 0.96). Circle v1 as *dominated by v4* (same F1, twice the cost). If you showed the aside, drop the archived builds up-and-right of v3 and label them "dominated."
 
-> "Five versions. The lesson isn't 'the last one wins' — the most sophisticated build *lost*. It's that **each jump is a decision a tech lead owns**: give it context (and accept the trade), compose specialists (the big win), and govern cost — which sometimes means *not* building the fancy thing. Teach, compose, govern."
+> "Four rungs. The lesson isn't 'the last one is fanciest' — the last one is the *cheapest*, and it's the same design as the best one. **Each jump is a decision a tech lead owns**: give it context (and accept the trade), compose specialists (the big win), and govern cost by dialing the *model*, not the agent count. Composition is the frontier; the model is just where you sit on it."
+
+**Then the call to action — land the plane here:**
+
+> "Two things to take back to your teams. **One: bring your own personas.** Ours are a security hawk, a perf skeptic, a KISS zealot, a quality critic — because that's who argues in *our* reviews. Yours might be accessibility, API-compatibility, data-privacy, on-call-ability. The architecture is the same; the *use-cases* are yours to define. **Two — and this is non-negotiable: measure it, continuously.** Everything I just showed you is only knowable because we kept a ground-truth benchmark and scored every version on precision, recall, and cost. An agent you don't measure is a vibe. The tech lead's job in the agentic era isn't to ship the most agents — it's to *teach* the agent your codebase, *compose* the specialists your team needs, and *govern* it with numbers. Teach, compose, govern."
 
 Close. Hand back to slides for Q&A.
 
@@ -108,13 +108,14 @@ Close. Hand back to slides for Q&A.
 | 0 | v1 cold open / PR#1 | live | 1 min |
 | 1 | TEACH — v1 vs v2 / PR#2 (context as a *trade*) | live (v2) | 5 min |
 | 2 | COMPOSE — v3 live / PR#1 (the hero: F1 0.96) | live | 5 min |
-| 3 | GOVERN — v4 cautionary tale → v5 vs v4 / PR#3 | live (v5), replay v4 | 7 min |
-| 4 | full matrix + Pareto slide | slide | 1-2 min |
-| | **total** | | **≈19-20 min** |
+| 3 | GOVERN — **v4 live** / PR#3 ($0.066, still catches JWT) + optional 60s "spend-up" aside | **live (v4)** | 6 min |
+| 4 | frontier = {v4, v3} slide + call to action (BYO personas, always measure) | slide | 2-3 min |
+| | **total** | | **≈19-20 min** (drop the aside / trim Beat 2 if tight) |
 
 ## Risk / fallback notes
 
 - **Network on stage:** every beat has a pre-recorded fallback. If Wi-Fi dies, switch to recordings without breaking narrative.
-- **Run-to-run variance:** Haiku (v5) swings ±0.03 F1 between trials — if a live v5 run looks worse than the slide, say so out loud ("this is real, models are stochastic") rather than re-running.
-- **Don't run v4 live.** Ever. ~12 min unthrottled (~$1.15), and the CLI can stall it for *hours* under rate limits. Always replay.
-- **Latency dead air:** v1/v2/v3/v5 each take 1-3 min live. Fill it by reading the diff aloud and predicting what the agent will catch — turns dead time into engagement.
+- **Run-to-run variance:** Haiku swings — **v4 up to ±0.20 on the small PR#1**. Run the live v4 beat on **PR#3**, where it's rock-stable (±0.00) and the JWT/SSRF catches are reliable. If any live run looks worse than the slide, say so out loud ("this is real, cheap models are stochastic — which is exactly the tax I flagged") rather than re-running. The variance is *on-message*, not an accident.
+- **v4 is the safest live closer:** ~80s, ~$0.07, single call (no throttle risk), and on PR#3 it's deterministic enough to trust on stage.
+- **Never run the archived parallel+skeptic build live** (only relevant if you show the optional aside). ~12 min unthrottled (~$1.15), and the CLI can stall it for *hours* under rate limits. Always replay a saved trial.
+- **Latency dead air:** v1/v2/v3/v4 each take 1-3 min live. Fill it by reading the diff aloud and predicting what the agent will catch — turns dead time into engagement.

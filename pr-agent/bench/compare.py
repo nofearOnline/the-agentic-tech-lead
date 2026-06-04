@@ -138,10 +138,19 @@ def aggregate(results_dir: Path, version: str, pr: int) -> Aggregate | None:
     )
 
 
+# Exploratory builds kept on disk for evidence but out of the 4-rung ladder.
+# Excluded from default discovery; still reachable via explicit --version.
+ARCHIVED_VERSIONS = {"v4_parallel_personas", "v5_tiered"}
+
+
 def _discover_versions(results_dir: Path) -> list[str]:
     if not results_dir.exists():
         return []
-    return sorted(p.name for p in results_dir.iterdir() if p.is_dir())
+    return sorted(
+        p.name
+        for p in results_dir.iterdir()
+        if p.is_dir() and p.name not in ARCHIVED_VERSIONS
+    )
 
 
 def _discover_prs(results_dir: Path, version: str) -> list[int]:
@@ -189,13 +198,15 @@ def _markdown_version_rollup(rows: list[Aggregate]) -> str:
     for r in rows:
         by_version[r.version].append(r)
 
-    # Stable order matching the evolution narrative if present.
+    # Stable order matching the evolution narrative. The ladder is four rungs;
+    # v4_persona_lite (the v3 bundle on a cheap model) is the punchline the talk
+    # ends on. The parallel-agents / tiered experiments are archived out of the
+    # ladder (see ARCHIVED_VERSIONS) and are not shown by default.
     order = [
         "v1_single_shot",
         "v2_repo_aware",
         "v3_persona_bundle",
-        "v4_parallel_personas",
-        "v5_tiered",
+        "v4_persona_lite",
     ]
     versions = [v for v in order if v in by_version] + [
         v for v in sorted(by_version) if v not in order
@@ -203,7 +214,7 @@ def _markdown_version_rollup(rows: list[Aggregate]) -> str:
 
     header = (
         "| version | mean cost | mean latency | precision | recall | F1 | "
-        "vs v1 cost | vs v4 cost |\n"
+        "vs v1 cost | vs v3 cost |\n"
         "| --- | --- | --- | --- | --- | --- | --- | --- |\n"
     )
 
@@ -226,17 +237,17 @@ def _markdown_version_rollup(rows: list[Aggregate]) -> str:
         }
 
     v1_cost = summaries.get("v1_single_shot", {}).get("cost", 0.0)
-    v4_cost = summaries.get("v4_parallel_personas", {}).get("cost", 0.0)
+    v3_cost = summaries.get("v3_persona_bundle", {}).get("cost", 0.0)
 
     body = []
     for v in versions:
         s = summaries[v]
         v1x = f"{s['cost'] / v1_cost:.1f}x" if v1_cost else "-"
-        v4x = f"{s['cost'] / v4_cost:.2f}x" if v4_cost else "-"
+        v3x = f"{s['cost'] / v3_cost:.2f}x" if v3_cost else "-"
         body.append(
             f"| {v} | ${s['cost']:.3f} | {s['latency']:.0f}s | "
             f"{s['precision']:.2f} | {s['recall']:.2f} | {s['f1']:.2f} | "
-            f"{v1x} | {v4x} |"
+            f"{v1x} | {v3x} |"
         )
     return "## Per-version rollup (mean across all PRs/trials)\n\n" + header + "\n".join(body)
 

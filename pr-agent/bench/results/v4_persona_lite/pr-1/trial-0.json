@@ -1,0 +1,432 @@
+{
+  "version": "v4_persona_lite",
+  "pr": 1,
+  "trial": 0,
+  "title": "Add coupon discount support to charge endpoint",
+  "elapsed_seconds": 98.66796684265137,
+  "cost_usd": 0.08404874999999999,
+  "usage": {
+    "input_tokens": 9,
+    "cache_creation_input_tokens": 18635,
+    "cache_read_input_tokens": 0,
+    "output_tokens": 11712
+  },
+  "summary": "The team identified 2 blocking issues and 12 quality concerns. Most critical: console.log of the full request body (exposes card data\u2014PCI-DSS violation), and a silently swallowed exception in the coupon-application path that hides errors and produces incorrect transactions. The coupon discount is also over-engineered with strategy pattern + factory for 6 hardcoded static rows. Secondary issues include poor variable naming (p, x, tmp, result2, doStuff), unsafe loose-equality comparisons, missing input validation, type-safety escapes with `any`, inconsistent response naming, and commented-out dead code.",
+  "findings": [
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 15,
+      "line_end": 15,
+      "category": "security",
+      "severity": "must",
+      "title": "Request body with card data logged to console",
+      "message": "console.log('DEBUG charge body:', JSON.stringify(theData)) outputs the entire request body, which contains PAN and CVC. This violates PCI-DSS 3.4 (plaintext PAN in logs) and creates an exfiltration channel. Remove all console.log from this code path. If debugging is required, use the project's pino logger with its redaction allowlist, which automatically scrubs card.number and card.cvc.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 19,
+      "line_end": 25,
+      "category": "quality",
+      "severity": "must",
+      "title": "Silently swallowed exception in coupon-application error handler",
+      "message": "The try-catch on lines 19\u201325 catches all exceptions from doStuff but contains only a // TODO comment. If an invalid coupon code or calculation error occurs, the exception is silently swallowed and the charge proceeds at the original amount with zero indication of failure. This hides bugs, produces incorrect transactions, and leaves no trace in logs. Either handle the error explicitly (log, return 400 Bad Request) or rethrow it to the outer error handler. Never silently drop exceptions on a payment path.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 1,
+      "line_end": 50,
+      "category": "kiss",
+      "severity": "should",
+      "title": "Over-engineered strategy pattern for static 6-row coupon lookup",
+      "message": "This implements abstract class + two strategy subclasses + a factory to handle 6 hardcoded coupon codes. The design is built on \"we might add date-bound or customer-specific coupons later,\" but there is exactly one caller and zero evidence that a second use case exists. YAGNI: the data IS the design. Collapse to a simple lookup: const COUPONS: Record<string, {kind:'percent'|'flat', value:number}> = {WELCOME10:{kind:'percent',value:10}, ...}; function applyCoupon(amount:number, code?:string) { const c=COUPONS[code??'']; return c ? c.kind==='percent'?Math.floor(amount*(1-c.value/100)):Math.max(0,amount-c.value) : amount; }. One function, one data structure, all behavior and intent visible on the page.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 5,
+      "line_end": 6,
+      "category": "quality",
+      "severity": "should",
+      "title": "Abstract class with one abstract method should be interface",
+      "message": "AbstractCouponStrategy has one abstract method and zero concrete behavior. That is a contract, not a class. Using an abstract class forces single inheritance, prevents composition, and confuses intent. Change to: interface CouponStrategy { apply(amount: number): number; }. Interfaces are the right tool for pure contracts.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 10,
+      "line_end": 10,
+      "category": "standards",
+      "severity": "should",
+      "title": "Single-letter variable 'p' obscures intent",
+      "message": "private p: number is initialized as this.p = p. A reader has to infer that 'p' stands for 'percent.' Use descriptive names: private percentOff: number; or private discountPercent: number;. This is especially important in a constructor parameter where type inference alone doesn't tell you the meaning.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 17,
+      "line_end": 17,
+      "category": "standards",
+      "severity": "should",
+      "title": "Intermediate variable 'x' has no semantic meaning",
+      "message": "var x = amount * (1 - this.p) is the amount after applying a percentage discount. Call it discountedAmount or appliedAmount, not 'x'. 'x' forces a reader to mentally trace the calculation to understand what it represents.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 24,
+      "line_end": 24,
+      "category": "standards",
+      "severity": "should",
+      "title": "Abbreviated variable 'amt' should be spelled out",
+      "message": "private amt: number is an abbreviation that saves nothing\u2014the full word 'amount' is clear and consistent with the rest of the codebase. Use private amount: number; and initialize it as this.amount = amount;.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 35,
+      "line_end": 44,
+      "category": "standards",
+      "severity": "should",
+      "title": "Use strict equality (===) instead of loose equality (==)",
+      "message": "Lines 35\u201344 use if (code == 'WELCOME10') with loose equality. Use === to avoid unexpected type coercion and to align with the rest of the codebase (eqeqeq rule). Loose equality can mask bugs when types differ unexpectedly.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 51,
+      "line_end": 51,
+      "category": "quality",
+      "severity": "should",
+      "title": "Exported function 'doStuff' has meaningless name",
+      "message": "'doStuff' tells callers nothing about what the function does. Rename to applyCoupon, applyDiscount, or computeDiscountedAmount so the intent is self-documenting. The call site in the controller would then read finalAmount = applyCoupon(payload.amount, couponCode) instead of finalAmount = doStuff(...), which explains itself.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 57,
+      "line_end": 57,
+      "category": "standards",
+      "severity": "should",
+      "title": "Variable 'tmp' is too terse; rename to 'strategy' or 'handler'",
+      "message": "var tmp = CouponHandlerFactory.build(couponCode) gives the strategy instance a name that signals abandonment. Rename to const strategy = ... or const handler = ... so a reader understands immediately that this is the resolved coupon application strategy.",
+      "source": "kiss_zealot",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 58,
+      "line_end": 58,
+      "category": "quality",
+      "severity": "should",
+      "title": "console.log used instead of structured logger",
+      "message": "console.log('DEBUG: unknown coupon code:', couponCode) bypasses the project's pino logger, logging strategy, log levels, and redaction allowlist. It also leaks whatever couponCode value was sent, which could be an attacker-controlled string. Remove this debug log entirely\u2014unrecognized coupons should either raise a validation error (return 400) or silently return the full amount without logging.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 58,
+      "line_end": 58,
+      "category": "standards",
+      "severity": "should",
+      "title": "Use strict equality (===) for null checks",
+      "message": "if (tmp == null) uses loose equality. With ==, this is true for both null and undefined, which can mask bugs. Use tmp === null or, if you want to catch both, be explicit: tmp == null ? ... Use === as the default; loose equality is a footgun.",
+      "source": "security_hawk",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 61,
+      "line_end": 61,
+      "category": "standards",
+      "severity": "should",
+      "title": "Variable name 'result2' is opaque and unmotivated",
+      "message": "let result2 = tmp.apply(amount) uses a name that suggests this is a second or fallback result, or that the author gave up on naming. Call it finalAmount, discountedAmount, or appliedAmount so the intent is clear. 'result2' forces a reader to trace the logic to understand what value it holds.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 13,
+      "line_end": 14,
+      "category": "quality",
+      "severity": "should",
+      "title": "couponCode extracted and used without schema validation",
+      "message": "Lines 13\u201314 extract couponCode from the raw req.body without validation in the chargeSchema. It should be added to chargeSchema as an optional string field with length constraints (e.g., z.string().min(1).max(32).optional()) so invalid codes are rejected at the boundary. Unvalidated input is harder to reason about and easier for attackers to exploit.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/http/controllers/paymentsController.ts",
+      "line_start": 32,
+      "line_end": 35,
+      "category": "quality",
+      "severity": "should",
+      "title": "Response mutated with 'any' type; naming mixes conventions",
+      "message": "Line 32 casts transaction to 'any' to mutate it and add discount_amount and coupon_code (snake_case). The response now mixes transaction's original field casing with snake_case additions, breaking the contract. Define a proper response type: interface ChargeResponse { ...transaction fields, discountAmount?: number, couponCode?: string }; construct it explicitly, and let TypeScript verify shape and consistency.",
+      "source": "quality_critic",
+      "extra": {}
+    },
+    {
+      "file": "payments-service/src/services/couponDiscount.ts",
+      "line_start": 47,
+      "line_end": 49,
+      "category": "kiss",
+      "severity": "suggestion",
+      "title": "Remove commented-out dead code (FREESHIP branch)",
+      "message": "Lines 47\u201349 contain a commented-out else-if for a FREESHIP coupon. Commented code rots and confuses future maintainers\u2014is it a rollback plan, a fossil, or a feature todo? Git preserves history; delete the dead branch now. If FREESHIP is needed later, restore it from git blame with full context and rationale.",
+      "source": "kiss_zealot",
+      "extra": {}
+    }
+  ],
+  "score": {
+    "pr": 1,
+    "totals": {
+      "findings": 16,
+      "issues": 15,
+      "true_positives": 14,
+      "matched_findings": 16,
+      "false_positives": 0,
+      "false_negatives": 1
+    },
+    "metrics": {
+      "precision": 1.0,
+      "recall": 0.9333333333333333,
+      "f1": 0.9655172413793104
+    },
+    "matches": [
+      {
+        "finding_index": 0,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-security-card-pan-logged",
+        "matched_keyword": "log"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-quality-silent-error-swallow",
+        "matched_keyword": "swallow"
+      },
+      {
+        "finding_index": 1,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "0"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "over-engineer"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-correctness-float-money",
+        "matched_keyword": "Math.floor"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "const"
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-standards-loose-equality",
+        "matched_keyword": "==="
+      },
+      {
+        "finding_index": 2,
+        "issue_id": "pr1-kiss-abstract-class-vs-interface",
+        "matched_keyword": "abstract class"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 3,
+        "issue_id": "pr1-kiss-abstract-class-vs-interface",
+        "matched_keyword": "abstract class"
+      },
+      {
+        "finding_index": 4,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 5,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 6,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 7,
+        "issue_id": "pr1-standards-loose-equality",
+        "matched_keyword": "==="
+      },
+      {
+        "finding_index": 8,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "doStuff"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "factory"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "name"
+      },
+      {
+        "finding_index": 9,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "strategy"
+      },
+      {
+        "finding_index": 10,
+        "issue_id": "pr1-quality-debug-log-coupon",
+        "matched_keyword": "console.log"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "tmp"
+      },
+      {
+        "finding_index": 11,
+        "issue_id": "pr1-standards-loose-equality",
+        "matched_keyword": "==="
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr1-quality-bad-naming",
+        "matched_keyword": "naming"
+      },
+      {
+        "finding_index": 12,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "var"
+      },
+      {
+        "finding_index": 13,
+        "issue_id": "pr1-correctness-coupon-not-validated",
+        "matched_keyword": "validation"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr1-correctness-discount-always-zero",
+        "matched_keyword": "discount_amount"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr1-standards-snake-case-response",
+        "matched_keyword": "snake_case"
+      },
+      {
+        "finding_index": 14,
+        "issue_id": "pr1-quality-any-cast",
+        "matched_keyword": "any"
+      },
+      {
+        "finding_index": 15,
+        "issue_id": "pr1-kiss-strategy-factory-overengineered",
+        "matched_keyword": "KISS"
+      },
+      {
+        "finding_index": 15,
+        "issue_id": "pr1-standards-var-instead-of-const",
+        "matched_keyword": "let"
+      },
+      {
+        "finding_index": 15,
+        "issue_id": "pr1-quality-dead-code-comment",
+        "matched_keyword": "commented"
+      }
+    ],
+    "covered_issue_ids": [
+      "pr1-security-card-pan-logged",
+      "pr1-quality-silent-error-swallow",
+      "pr1-correctness-discount-always-zero",
+      "pr1-standards-snake-case-response",
+      "pr1-correctness-coupon-not-validated",
+      "pr1-kiss-strategy-factory-overengineered",
+      "pr1-correctness-float-money",
+      "pr1-quality-bad-naming",
+      "pr1-standards-var-instead-of-const",
+      "pr1-standards-loose-equality",
+      "pr1-quality-dead-code-comment",
+      "pr1-quality-any-cast",
+      "pr1-kiss-abstract-class-vs-interface",
+      "pr1-quality-debug-log-coupon"
+    ],
+    "unmatched_findings": [],
+    "unmatched_issue_ids": [
+      "pr1-test-no-tests-added"
+    ],
+    "per_category": {
+      "security": {
+        "total": 1,
+        "found": 1
+      },
+      "quality": {
+        "total": 5,
+        "found": 5
+      },
+      "correctness": {
+        "total": 3,
+        "found": 3
+      },
+      "standards": {
+        "total": 3,
+        "found": 3
+      },
+      "kiss": {
+        "total": 2,
+        "found": 2
+      },
+      "test": {
+        "total": 1,
+        "found": 0
+      }
+    },
+    "per_severity": {
+      "must": {
+        "total": 4,
+        "found": 4
+      },
+      "should": {
+        "total": 9,
+        "found": 8
+      },
+      "suggestion": {
+        "total": 2,
+        "found": 2
+      }
+    }
+  },
+  "error": null
+}
