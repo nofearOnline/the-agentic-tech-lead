@@ -4,6 +4,7 @@ export const refundSchema = z.object({
   transaction_id: z.string(),
   amount: z.number().optional(),
   reason: z.string().optional(),
+  idempotency_key: z.string().optional(),
 });
 
 export const historyQuerySchema = z.object({

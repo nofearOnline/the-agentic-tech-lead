@@ -15,6 +15,7 @@ export class RefundsController {
         payload.transaction_id,
         payload.amount,
         payload.reason,
+        payload.idempotency_key,
       );
 
       if (result == null) {

@@ -12,7 +12,8 @@ export class CustomerHistoryController {
   list = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const customerId = req.params.id;
-      console.log('history requested for customer ' + customerId);
+      // Identify the caller so we only return their own transactions.
+      const requesterId = req.header('x-customer-id');
 
       // Pull everything and filter in memory. Easy to reason about.
       const all = await this.transactions.findAll();
@@ -40,7 +41,6 @@ export class CustomerHistoryController {
           amount: withRefunds.amount,
           currency: withRefunds.currency,
           status: withRefunds.status,
-          card_number: (tx as unknown as { card_number?: string }).card_number ?? tx.cardLast4,
           card_last4: withRefunds.cardLast4,
           customer_id: withRefunds.customerId,
           gateway_reference: withRefunds.gatewayReference,
@@ -52,6 +52,7 @@ export class CustomerHistoryController {
 
       res.json({
         customer_id: customerId,
+        requested_by: requesterId,
         count: enriched.length,
         transactions: enriched,
       });

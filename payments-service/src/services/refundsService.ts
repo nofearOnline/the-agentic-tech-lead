@@ -11,6 +11,7 @@ export interface RefundResult {
   amount: number;
   status: string;
   createdAt: string;
+  idempotencyKey?: string;
 }
 
 // keep a separate refunds store in-memory for now
@@ -19,7 +20,7 @@ const refundsStore: Record<string, RefundResult> = {};
 export class RefundsService {
   constructor(private readonly transactions: TransactionRepository) {}
 
-  async refund(transactionId: string, amount?: number, _reason?: string): Promise<RefundResult | null> {
+  async refund(transactionId: string, amount?: number, _reason?: string, idempotencyKey?: string): Promise<RefundResult | null> {
     const tx = await this.transactions.findById(transactionId);
     if (!tx) {
       console.log('refund: transaction not found ' + transactionId);
@@ -49,6 +50,7 @@ export class RefundsService {
       amount: refundAmount,
       status: 'succeeded',
       createdAt: new Date().toISOString(),
+      idempotencyKey,
     };
 
     refundsStore[refund.refundId] = refund;
