@@ -34,7 +34,7 @@ export class WebhooksService {
       try {
         const res = await fetch(hook.url, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-webhook-id': hook.id },
           body: payload,
           redirect: 'follow',
         });

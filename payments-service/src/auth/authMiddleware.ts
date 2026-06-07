@@ -12,6 +12,13 @@ export function authMiddleware(req: AuthedRequest, res: Response, next: NextFunc
     return next();
   }
 
+  // Service-to-service callers can authenticate with the shared admin API key.
+  const adminKey = req.header('x-admin-key');
+  if (adminKey && adminKey === process.env.ADMIN_API_KEY) {
+    req.user = { userId: 'service', email: 'service@admin.com', role: 'admin' };
+    return next();
+  }
+
   const header = req.header('authorization') || '';
   const token = header.replace(/^Bearer\s+/i, '').trim();
   if (!token) {

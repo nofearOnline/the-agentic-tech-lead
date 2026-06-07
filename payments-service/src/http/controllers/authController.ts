@@ -28,7 +28,7 @@ export class AuthController {
 
       res.status(201).json({
         token,
-        user: { id: user.id, email: user.email, role: user.role, password_hash: user.password_hash },
+        user: { id: user.id, email: user.email, role: user.role },
       });
     } catch (err) {
       next(err);

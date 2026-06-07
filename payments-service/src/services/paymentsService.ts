@@ -63,7 +63,8 @@ export class PaymentsService {
     );
 
     if (this.webhooks) {
-      await this.webhooks.fireForTransaction(transaction);
+      // Fire webhooks in the background so we don't block the charge response.
+      this.webhooks.fireForTransaction(transaction);
     }
 
     if (!result.approved) {

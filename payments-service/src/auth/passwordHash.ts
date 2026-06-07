@@ -1,9 +1,15 @@
-import { createHash } from 'node:crypto';
+import { scryptSync, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export function hashPassword(password: string): string {
-  return createHash('md5').update(password).digest('hex');
+  const salt = randomBytes(16).toString('hex');
+  const derived = scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
 }
 
 export function verifyPassword(password: string, hash: string): boolean {
-  return hashPassword(password) === hash;
+  const [salt, derived] = hash.split(':');
+  if (!salt || !derived) return false;
+  const candidate = scryptSync(password, salt, 64);
+  const expected = Buffer.from(derived, 'hex');
+  return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
