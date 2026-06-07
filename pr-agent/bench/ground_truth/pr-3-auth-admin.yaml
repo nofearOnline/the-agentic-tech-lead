@@ -62,21 +62,6 @@ issues:
       - JWT_SECRET
       - throw
 
-  - id: pr3-security-master-key-backdoor
-    category: security
-    severity: must
-    file: payments-service/src/auth/jwt.ts
-    line_range: [15, 18]
-    description: >
-      `verifyToken` returns an admin payload for the literal string
-      'admin-master-key'. A hardcoded backdoor that grants full admin.
-    match_keywords:
-      - admin-master-key
-      - backdoor
-      - master key
-      - hardcoded
-      - bypass
-
   - id: pr3-security-jwt-no-algorithm-pin
     category: security
     severity: should
@@ -112,25 +97,6 @@ issues:
       - randomBytes
       - secure random
       - entropy
-
-  - id: pr3-security-md5-password-hash
-    category: security
-    severity: must
-    file: payments-service/src/auth/passwordHash.ts
-    line_range: [3, 9]
-    description: >
-      Passwords are hashed with MD5 - no salt, no work factor, broken
-      hash function. Use bcrypt/scrypt/argon2.
-    match_keywords:
-      - md5
-      - hash
-      - bcrypt
-      - scrypt
-      - argon2
-      - salt
-      - work factor
-      - broken
-      - password
 
   # ---- userStore.ts ----
   - id: pr3-security-ts-nocheck
@@ -235,7 +201,7 @@ issues:
     category: security
     severity: must
     file: payments-service/src/auth/authMiddleware.ts
-    line_range: [33, 38]
+    line_range: [40, 47]
     description: >
       `requireAdmin` grants admin to anyone whose email ends in
       `@admin.com` or `@honeybook.com`. Email suffix is not an identity.
@@ -248,6 +214,27 @@ issues:
       - role
       - authorization
       - RBAC
+
+  - id: pr3-security-timing-unsafe-apikey
+    category: security
+    severity: should
+    file: payments-service/src/auth/authMiddleware.ts
+    line_range: [15, 19]
+    description: >
+      The `x-admin-key` shortcut compares the caller-supplied key to
+      `process.env.ADMIN_API_KEY` with `===`, a non-constant-time compare
+      that leaks the key byte-by-byte via a timing side-channel. Secret
+      comparison must use `crypto.timingSafeEqual` (the codebase already
+      imports it in passwordHash.ts).
+    match_keywords:
+      - timing
+      - constant-time
+      - constant time
+      - timingSafeEqual
+      - side-channel
+      - side channel
+      - secret comparison
+      - "==="
 
   # ---- adminController duplication ----
   - id: pr3-dry-admin-role-check-duplicated
@@ -288,24 +275,27 @@ issues:
       - localhost
       - redirect
 
-  - id: pr3-perf-webhook-sync-in-charge
-    category: performance
-    severity: must
+  - id: pr3-quality-webhook-floating-promise
+    category: quality
+    severity: should
     file: payments-service/src/services/paymentsService.ts
-    line_range: [62, 66]
+    line_range: [65, 68]
     description: >
-      `await this.webhooks.fireForTransaction(transaction)` runs in the
-      charge request path. Latency is now `latency(gateway) +
-      sum(latency of every registered webhook)`.
+      `this.webhooks.fireForTransaction(transaction)` is invoked without
+      `await` and without a `.catch`. It's a floating promise: any rejection
+      becomes an unhandled promise rejection and every delivery failure is
+      silently swallowed. Either await it off the request path or hand it to
+      a queue with explicit error handling.
     match_keywords:
-      - synchronous
-      - sync
-      - blocking
-      - request path
-      - queue
-      - async
-      - latency
-      - webhook
+      - floating promise
+      - unhandled
+      - await
+      - .catch
+      - fire-and-forget
+      - unhandled rejection
+      - not awaited
+      - swallow
+      - void
 
   - id: pr3-quality-webhook-fire-no-auth
     category: security
@@ -325,6 +315,50 @@ issues:
       - payload
       - leak
       - secret
+
+  - id: pr3-security-webhook-no-hmac
+    category: security
+    severity: should
+    file: payments-service/src/services/webhooksService.ts
+    line_range: [33, 42]
+    description: >
+      Outgoing webhooks are POSTed with a `content-type` and an
+      `x-webhook-id` header but no HMAC signature over the body. Receivers
+      can't verify the payload came from us, so anyone who learns a
+      subscriber URL can forge `transaction.created` events. Sign the body
+      (e.g. `X-Signature: sha256=HMAC(secret, body)`).
+    match_keywords:
+      - HMAC
+      - signature
+      - sign
+      - unsigned
+      - verify
+      - authenticity
+      - X-Signature
+      - shared secret
+
+  - id: pr3-perf-webhook-sequential-await
+    category: performance
+    severity: should
+    file: payments-service/src/services/webhooksService.ts
+    line_range: [33, 43]
+    description: >
+      `for (const hook of webhooks) { await fetch(...) }` delivers webhooks
+      strictly one at a time. With N subscribers, total latency is the sum
+      of every endpoint's latency and one slow/hanging endpoint blocks all
+      the rest. Fan out with `Promise.all` / `Promise.allSettled` (with a
+      timeout).
+    match_keywords:
+      - sequential
+      - await in loop
+      - await in a loop
+      - Promise.all
+      - allSettled
+      - parallel
+      - serial
+      - one at a time
+      - blocking
+      - fan-out
 
   # ---- paymentsService changes ----
   - id: pr3-security-store-pan-cvc
@@ -481,21 +515,6 @@ issues:
       - console.log
       - log
       - PII
-
-  - id: pr3-security-password-hash-in-response
-    category: security
-    severity: must
-    file: payments-service/src/http/controllers/authController.ts
-    line_range: [25, 35]
-    description: >
-      `register` response includes `password_hash` (returned from
-      `createUser`). The hash should never leave the server.
-    match_keywords:
-      - password_hash
-      - hash
-      - response
-      - leak
-      - expose
 
   - id: pr3-security-jwt-no-expiry
     category: security

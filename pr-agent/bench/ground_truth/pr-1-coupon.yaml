@@ -159,19 +159,27 @@ issues:
       - tmp
       - result2
 
-  - id: pr1-standards-var-instead-of-const
-    category: standards
+  - id: pr1-security-coupon-redos
+    category: security
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [14, 60]
+    line_range: [59, 62]
     description: >
-      `var` (instead of `let`/`const`) at lines 14 and ~57. The surrounding
-      codebase uses `const`/`let` consistently.
+      `COUPON_CODE_PATTERN = /^([A-Za-z0-9]+)+$/` is tested against the
+      user-supplied coupon code. The nested quantifier `(...+)+` backtracks
+      catastrophically: a crafted code (e.g. many valid chars + one invalid)
+      pins the event loop for seconds. ReDoS on an untrusted input. Use a
+      linear regex / length cap.
     match_keywords:
-      - var
-      - let
-      - const
-      - function scope
+      - ReDoS
+      - redos
+      - backtracking
+      - catastrophic
+      - nested quantifier
+      - denial of service
+      - regex
+      - exponential
+      - event loop
 
   - id: pr1-standards-loose-equality
     category: standards
@@ -255,7 +263,7 @@ issues:
     category: quality
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [58, 62]
+    line_range: [62, 67]
     description: >
       `console.log('DEBUG: unknown coupon code:', couponCode)` is a
       production-path debug log: writes attacker-controlled input to

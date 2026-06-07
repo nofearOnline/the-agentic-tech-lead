@@ -63,23 +63,28 @@ issues:
       - case
       - broken sort
 
-  - id: pr2-security-card-pan-in-response
+  - id: pr2-security-idor-no-ownership-check
     category: security
     severity: must
     file: payments-service/src/http/controllers/customerHistoryController.ts
-    line_range: [38, 40]
+    line_range: [12, 20]
     description: >
-      Response includes `card_number` when present on the transaction
-      (PR3 puts it there). Even with the fallback to `cardLast4`, the
-      controller is shaped to expose full PAN if it's stored.
+      The handler reads `x-customer-id` into `requesterId` (the comment even
+      says "so we only return their own transactions") but never compares it
+      to the `:id` path param - it queries and returns whatever customer id
+      is in the URL. Any caller can read any customer's full transaction
+      history. IDOR / broken object-level authorization.
     match_keywords:
-      - card_number
-      - PAN
-      - card
-      - PCI
-      - PII
-      - mask
-      - last4
+      - IDOR
+      - BOLA
+      - authorization
+      - ownership
+      - access control
+      - requesterId
+      - x-customer-id
+      - any customer
+      - object level
+      - not enforced
 
   - id: pr2-correctness-refund-amount-coercion
     category: correctness
@@ -239,20 +244,25 @@ issues:
 
   # ---- planted after v1 baseline review ----
 
-  - id: pr2-security-customer-id-logged
-    category: security
+  - id: pr2-correctness-idempotency-key-ignored
+    category: correctness
     severity: should
-    file: payments-service/src/http/controllers/customerHistoryController.ts
-    line_range: [14, 16]
+    file: payments-service/src/services/refundsService.ts
+    line_range: [23, 54]
     description: >
-      `console.log('history requested for customer ' + customerId)` writes
-      customer identifiers (PII) to stdout / log aggregator and bypasses
-      the pino logger that already redacts.
+      `refund()` accepts an `idempotencyKey` and stores it on the refund, but
+      never looks it up before creating a new refund. Retrying the same
+      request with the same key creates duplicate refunds - the key is
+      accepted-but-ignored, which is worse than not offering it because
+      clients trust it.
     match_keywords:
-      - console.log
-      - customer
-      - customerId
-      - PII
-      - leak
-      - log
-      - pino
+      - idempotency key
+      - idempotencyKey
+      - idempotency_key
+      - never checked
+      - never looked up
+      - accepted but ignored
+      - dedupe
+      - deduplicate
+      - duplicate refund
+      - retry

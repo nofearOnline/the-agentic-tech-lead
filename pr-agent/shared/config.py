@@ -56,6 +56,8 @@ class Config:
     pricing: dict[str, Pricing]
     eval: EvalConfig
     source_path: Path
+    backend: str = "auto"               # auto | sdk | cli
+    model_ids: dict[str, str] = None  # type: ignore[assignment]  # alias -> snapshot id or "auto"
 
     def model_for(self, role: ModelRole) -> str:
         if role not in self.models:
@@ -115,18 +117,53 @@ def load_config(path: Path | str | None = None) -> Config:
         prs=tuple(int(n) for n in eval_raw["prs"]),
     )
 
+    backend = str(raw.get("backend", "auto")).strip().lower() or "auto"
+    model_ids = {str(k): str(v) for k, v in (raw.get("model_ids") or {}).items()}
+
     return Config(
         repo=repo,
         models=models,
         pricing=pricing,
         eval=eval_cfg,
         source_path=cfg_path,
+        backend=backend,
+        model_ids=model_ids,
     )
+
+
+_DOTENV_LOADED = False
+
+
+def load_dotenv(path: Path | str | None = None) -> None:
+    """Load `pr-agent/.env` into os.environ (without overriding existing vars).
+
+    Zero-dependency parser: `KEY=VALUE` per line, `#` comments, optional quotes.
+    Idempotent. Existing environment variables always win.
+    """
+    global _DOTENV_LOADED
+    if _DOTENV_LOADED and path is None:
+        return
+    env_path = Path(path) if path else (_default_config_path().parent / ".env")
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+    if path is None:
+        _DOTENV_LOADED = True
 
 
 def require_anthropic_api_key() -> str:
     """Centralized check so every version dies with the same message."""
+    load_dotenv()
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
-        raise SystemExit("ANTHROPIC_API_KEY is not set in the environment.")
+        raise SystemExit(
+            "ANTHROPIC_API_KEY is not set (checked environment and pr-agent/.env)."
+        )
     return key

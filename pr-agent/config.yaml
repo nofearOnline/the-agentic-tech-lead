@@ -3,6 +3,13 @@
 # tune eval behavior. Nothing in pr-agent/v*/ should hardcode a model
 # name or a price; everything reads from here.
 
+# Which LLM backend the shared `call()` uses.
+#   auto -> sdk when ANTHROPIC_API_KEY is set (incl. pr-agent/.env), else cli
+#   sdk  -> Anthropic Python SDK (api key required)
+#   cli  -> `claude` CLI subprocess
+# Override at runtime with the PR_AGENT_BACKEND env var.
+backend: auto
+
 repo:
   # Target repo whose PRs we review. The agent fetches diffs via `gh pr diff`
   # against this slug. Worktree-based versions (v2+) will clone here.
@@ -20,6 +27,15 @@ models:
   specialist_narrow: haiku        # v3/v4 specialists for narrow lenses (conventions, tests, design system)
   tier1: haiku                    # v5 Tier 1 mechanical findings
   skeptic: opus                   # v4/v5 final filter pass (blog: "let the smartest agent prune")
+
+# Concrete Anthropic API model IDs for the SDK backend, keyed by the aliases
+# above. "auto" resolves to the newest snapshot in that family via the models
+# API at first use (cached). Pin to a dated snapshot for reproducibility, e.g.
+# sonnet: claude-sonnet-4-5-20250929
+model_ids:
+  haiku: auto
+  sonnet: auto
+  opus: auto
 
 eval:
   trials_per_pr: 3

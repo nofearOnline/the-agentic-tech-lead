@@ -23,7 +23,7 @@ import json
 import sys
 import time
 import traceback
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -49,12 +49,21 @@ from bench.score import load_ground_truth, score  # noqa: E402
 
 @dataclass
 class VersionSpec:
-    name: str          # folder name under pr-agent/
+    name: str          # folder name under pr-agent/ (used for import)
     review_fn: Callable[[PullRequest, Config], Any]
+    label: str = ""    # output key under bench/results/ (defaults to name)
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            self.label = self.name
 
 
-def load_version(name: str) -> VersionSpec:
-    """Import `pr-agent/<name>/review.py` and grab its `review` function."""
+def load_version(name: str, label: str | None = None) -> VersionSpec:
+    """Import `pr-agent/<name>/review.py` and grab its `review` function.
+
+    `label` (optional) is the key results are written under, letting the same
+    version code be benchmarked under multiple labels (e.g. one per model tier).
+    """
     try:
         module = importlib.import_module(f"{name}.review")
     except ImportError as exc:
@@ -62,7 +71,7 @@ def load_version(name: str) -> VersionSpec:
     review_fn = getattr(module, "review", None)
     if review_fn is None:
         raise SystemExit(f"{name}.review has no `review(pr, config)` function")
-    return VersionSpec(name=name, review_fn=review_fn)
+    return VersionSpec(name=name, review_fn=review_fn, label=label or name)
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +92,7 @@ class TrialResult:
     findings: list[dict[str, Any]]
     score: dict[str, Any] | None
     error: str | None = None
+    resolved_model: str = ""
 
 
 def _usage_dict(u: Usage) -> dict[str, int]:
@@ -155,7 +165,7 @@ def run_single(
 
     if result is None or _looks_throttled(result):
         return TrialResult(
-            version=version.name,
+            version=version.label,
             pr=int(pr.number),
             trial=trial,
             title=pr.title,
@@ -183,7 +193,7 @@ def run_single(
         )
 
     return TrialResult(
-        version=version.name,
+        version=version.label,
         pr=int(pr.number),
         trial=trial,
         title=pr.title,
@@ -194,6 +204,7 @@ def run_single(
         findings=findings,
         score=score_dict,
         error=None,
+        resolved_model=str(getattr(result, "resolved_model", "") or ""),
     )
 
 
@@ -275,6 +286,14 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to pr-agent/config.yaml (default: auto-detect)",
     )
     parser.add_argument(
+        "--model",
+        default=None,
+        help="Override the model for ALL roles (e.g. 'opus', 'sonnet', 'haiku', "
+        "or a full snapshot id). Results are written under "
+        "'<version>__<model>' so the same version can be benchmarked across "
+        "tiers without re-testing the default-model runs.",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Skip (version, PR, trial) cells that already have a usable result "
@@ -287,7 +306,16 @@ def main(argv: list[str] | None = None) -> int:
     prs = list(args.pr) if args.pr else list(config.eval.prs)
     trials = args.trials if args.trials is not None else config.eval.trials_per_pr
 
-    versions = [load_version(v) for v in args.version]
+    # Optional model sweep: remap every role to one model and tag the output
+    # label so (version x model) cells live in their own results dirs.
+    if args.model:
+        config = replace(config, models={role: args.model for role in config.models})
+        versions = [
+            load_version(v, label=f"{v}__{args.model}") for v in args.version
+        ]
+        sys.stderr.write(f"Model override: all roles -> {args.model!r}\n")
+    else:
+        versions = [load_version(v) for v in args.version]
 
     # Fetch each PR once; reuse the same PullRequest object across trials.
     sys.stderr.write(f"Fetching {len(prs)} PR(s) from {config.repo.slug}...\n")
@@ -312,12 +340,12 @@ def main(argv: list[str] | None = None) -> int:
     total_cost = 0.0
     skipped = 0
     for version in versions:
-        sys.stderr.write(f"--- {version.name} ---\n")
+        sys.stderr.write(f"--- {version.label} ---\n")
         for pr_n in prs:
             pr = pr_cache[pr_n]
             for trial in range(trials):
                 if args.resume and _already_succeeded(
-                    output_dir, version.name, pr_n, trial
+                    output_dir, version.label, pr_n, trial
                 ):
                     skipped += 1
                     sys.stderr.write(

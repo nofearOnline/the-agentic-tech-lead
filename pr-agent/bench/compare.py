@@ -142,14 +142,39 @@ def aggregate(results_dir: Path, version: str, pr: int) -> Aggregate | None:
 # Excluded from default discovery; still reachable via explicit --version.
 ARCHIVED_VERSIONS = {"v4_parallel_personas", "v5_tiered"}
 
+# (architecture, model) -> results label. The model sweep benchmarks each
+# architecture across tiers. Note the v3 persona-bundle architecture's haiku
+# cell is the shipped v4 (v4_persona_lite); its sonnet cell is v3 itself.
+MODEL_MATRIX: dict[str, dict[str, str]] = {
+    "v1 single-shot": {
+        "haiku": "v1_single_shot__haiku",
+        "sonnet": "v1_single_shot",
+        "opus": "v1_single_shot__opus",
+    },
+    "v2 repo-aware": {
+        "haiku": "v2_repo_aware__haiku",
+        "sonnet": "v2_repo_aware",
+        "opus": "v2_repo_aware__opus",
+    },
+    "v3 persona-bundle": {
+        "haiku": "v4_persona_lite",
+        "sonnet": "v3_persona_bundle",
+        "opus": "v3_persona_bundle__opus",
+    },
+}
+
 
 def _discover_versions(results_dir: Path) -> list[str]:
+    """Versions for the default ladder view. Excludes archived builds and
+    model-sweep variants (labels containing '__'); those render in the
+    dedicated model matrix instead.
+    """
     if not results_dir.exists():
         return []
     return sorted(
         p.name
         for p in results_dir.iterdir()
-        if p.is_dir() and p.name not in ARCHIVED_VERSIONS
+        if p.is_dir() and p.name not in ARCHIVED_VERSIONS and "__" not in p.name
     )
 
 
@@ -250,6 +275,61 @@ def _markdown_version_rollup(rows: list[Aggregate]) -> str:
             f"{v1x} | {v3x} |"
         )
     return "## Per-version rollup (mean across all PRs/trials)\n\n" + header + "\n".join(body)
+
+
+def _label_rollup(results_dir: Path, label: str) -> dict[str, float] | None:
+    """Trial-weighted means across all of a single label's PRs. Used by the
+    model matrix, which keys on raw results labels (incl. '__model' sweeps).
+    """
+    prs = _discover_prs(results_dir, label)
+    aggs = [a for a in (aggregate(results_dir, label, pr) for pr in prs) if a]
+    den = sum(a.trials for a in aggs)
+    if den == 0:
+        return None
+
+    def _w(attr: str) -> float:
+        return sum(getattr(a, attr) * a.trials for a in aggs) / den
+
+    return {
+        "f1": _w("f1_mean"),
+        "recall": _w("recall_mean"),
+        "precision": _w("precision_mean"),
+        "cost": _w("cost_mean"),
+        "latency": _w("elapsed_mean"),
+        "trials": float(den),
+    }
+
+
+def _markdown_model_matrix(results_dir: Path) -> str:
+    """Architecture x model-tier matrix. Each cell is one architecture run
+    end-to-end on one tier, summarized as F1 / recall / mean cost (weighted
+    across all PRs). Answers: 'for a given architecture, what does dialing the
+    model up or down buy?'
+    """
+    models = ["haiku", "sonnet", "opus"]
+    out = [
+        "## Model-tier matrix (F1 / recall / mean cost, weighted across all PRs)\n",
+        "Each cell = one architecture on one tier. '-' = not benchmarked. The "
+        "v3 persona-bundle row's haiku cell is the shipped v4 (v4_persona_lite); "
+        "its sonnet cell is v3 itself.\n",
+    ]
+    header = "| architecture | " + " | ".join(models) + " |"
+    sep = "| --- | " + " | ".join("---" for _ in models) + " |"
+    out.append(header)
+    out.append(sep)
+    for arch, mapping in MODEL_MATRIX.items():
+        cells = []
+        for m in models:
+            label = mapping.get(m)
+            summ = _label_rollup(results_dir, label) if label else None
+            if summ:
+                cells.append(
+                    f"F1 {summ['f1']:.2f} / R {summ['recall']:.2f} / ${summ['cost']:.3f}"
+                )
+            else:
+                cells.append("-")
+        out.append(f"| {arch} | " + " | ".join(cells) + " |")
+    return "\n".join(out)
 
 
 def _markdown_cost_recall_data(rows: list[Aggregate]) -> str:
@@ -357,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
 
     print("## Run comparison\n")
     print(_markdown_version_rollup(aggregates))
+    print("\n")
+    print(_markdown_model_matrix(results_dir))
     print("\n")
     print(_markdown_summary(aggregates))
     print("\n")

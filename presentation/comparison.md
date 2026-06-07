@@ -6,7 +6,7 @@ Matrix facts: 53 trials counted across all six builds (one archived-parallel/PR#
 
 > **v4 is v3 with one knob changed.** v3 runs four bundled reviewer personas on Sonnet; v4 runs the *identical* call on Haiku (~20× cheaper/token). Everything else is shared code. v4 exists to answer the one question the ladder hinges on: *did v3's win come from the architecture or from the spend?* **Answer: the architecture.**
 
-Regenerate the ladder tables with: `python pr-agent/bench/compare.py` (archived builds are excluded by default; pass `--version v4_parallel_personas` etc. to see them).
+Regenerate the ladder tables with: `python pr-agent/bench/compare.py` (archived builds are excluded by default; pass `--version v4_parallel_personas` etc. to see them). A full **architecture × model sweep** (every rung on Haiku / Sonnet / Opus 4.8, +$8.3) is in the **model-tier sweep appendix** below — it confirms the headline: composition is the cheaper lever, and reaches an issue class even Opus alone misses.
 
 ---
 
@@ -111,7 +111,9 @@ Full heatmaps for all 62 issues are in `compare.py` output. The rows that tell a
 | pr3-security-webhook-no-url-validation | 0/3 | 0/3 | 1/3 | **3/3** | SSRF-adjacent; v4 is the *most* reliable catcher |
 | pr3-security-listusers-arbitrary-filter | 2/3 | 2/3 | 0/3 | **2/3** | the one v3-on-Sonnet drops; the cheap tier keeps it |
 
-The JWT rows are the cleanest evidence for **Compose**: the persona builds go 3/3 where the generalist (v1/v2) goes 0/3. The decisive column is **v4**: it runs those same personas on **Haiku** and *still* goes 3/3 on `jwt-secret-fallback` and even **3/3 on the webhook SSRF issue that v3-on-Sonnet mostly misses (1/3)**. That is the whole thesis in one row — **the composition surfaces the issue class; the expensive model is not what's doing the work.**
+The JWT rows are the cleanest evidence for **Compose**: the persona builds go 3/3 where the generalist (v1/v2) goes 0/3 *on Sonnet*. The decisive column is **v4**: it runs those same personas on **Haiku** and *still* goes 3/3 on `jwt-secret-fallback` and even **3/3 on the webhook SSRF issue that v3-on-Sonnet mostly misses (1/3)**. That is the whole thesis in one row — **the composition surfaces the issue class; the expensive model is not what's doing the work.**
+
+> **One honest caveat the model-tier sweep (appendix) adds:** the v1/v2 `0/3` above are on **Sonnet**. Raw **Opus** *does* close the JWT gap on even the dumb v1 (v1-Opus 3/3) — so for the JWT class, spend and composition are partly *substitutable* (composition just does it on Haiku for $0.066 vs Opus for $0.16). The row that stays composition-**only** is the **webhook SSRF**: v4-Haiku catches it 3/3 while v1-Opus *and* v3-Opus both go 0/3. Composition reaches a class the frontier model alone does not.
 
 ---
 
@@ -143,6 +145,29 @@ Per-PR detail (for the appendix slide, if asked): parallel build — #1 F1 0.97/
 The lesson these earn: **complexity is a cost you must justify with measurement, not vibes.** That's why they're in the appendix rather than deleted — the negative result is part of the argument.
 
 ³ **The archived parallel build / PR#3 is n=2.** It was the heaviest cell (5 calls incl. Opus on a 713-line PR) and the CLI throttled it relentlessly. Two complete runs survived (F1 0.89 and 0.78); one attempt was clobbered to 5 findings (F1 0.25) by an overlapping resumable run during rate-limiting and is excluded (marked as an error in its trial file).
+
+---
+
+## Appendix — model-tier sweep (architecture × model)
+
+The ladder fixes one model per rung. This sweep asks the orthogonal question: **for a given architecture, what does dialing the model up or down actually buy?** Every architecture was run end-to-end on **Haiku, Sonnet, and Opus (4.8)** — 3 PRs × 3 trials each. The diagonal reuses the ladder runs (v1/v2/v3 = Sonnet; v3-Haiku *is* the shipped v4). Regenerate with `python pr-agent/bench/compare.py` (now prints this matrix).
+
+| architecture | Haiku | Sonnet | Opus 4.8 |
+| --- | --- | --- | --- |
+| **v1** single-shot | F1 0.80 / R 0.73 / $0.041 | F1 0.88 / R 0.84 / $0.145 | F1 0.91 / R 0.92 / $0.164 |
+| **v2** repo-aware | F1 0.69 / R 0.59 / $0.125 | F1 0.85 / R 0.79 / $0.295 | F1 0.89 / R 0.87 / $0.367 |
+| **v3** persona-bundle | **F1 0.88 / R 0.85 / $0.066** *(= v4)* | **F1 0.96 / R 0.97 / $0.289** *(= v3)* | F1 0.94 / R 0.96 / $0.226 |
+
+**What the matrix says — and it sharpens the whole talk:**
+
+1. **Architecture beats tier, per dollar.** The cheapest persona cell — **v3-on-Haiku (= v4), F1 0.88 at $0.066** — outscores v1 and v2 at *every* tier except it trails v1-on-Opus by 0.03 F1 (0.88 vs 0.91) while costing **2.5× less**. Climbing the *model* ladder on the wrong architecture (v2) tops out at 0.89 for $0.367; climbing the *architecture* ladder on the cheap model gets 0.88 for $0.066. Composition is the cheaper lever.
+2. **The dumb architecture is the most tier-sensitive; the smart one is near-flat.** v1 jumps **+0.11 F1** Haiku→Opus — it leans entirely on raw model power. v3 is already 0.88 on Haiku and only climbs to 0.96 on Sonnet, and Opus *doesn't help it* (0.94 < 0.96: more findings, slightly lower precision). The personas do the work the bigger model would otherwise have to, so the bigger model just adds noise.
+3. **v2 (repo-aware) is dominated at every tier** — agentic exploration is a consistent drag, not a one-PR fluke.
+4. **Security class, the honest version.** Raw Opus *can* buy back the JWT class on even the dumb v1 (**v1-Opus 3/3** on both JWT issues vs **v1-Sonnet 0/3**) — so for "obvious-once-you-look" issues, spend and composition are partly **substitutable**. But the **webhook-SSRF** issue is caught reliably *only* by the persona architecture, and — the punchline — **most reliably by the cheap Haiku persona run (v4: 3/3)**, which Opus single-shot *and* Opus persona-bundle both miss (0/3). **Composition reaches an issue class that throwing the frontier model at the problem does not.**
+
+**Frontier across all 9 cells** (cost, F1): v1-Haiku (0.041, 0.80) → **v3-Haiku/v4** (0.066, 0.88) → v1-Opus (0.164, 0.91) → v3-Opus (0.226, 0.94) → **v3-Sonnet** (0.289, 0.96). The persona architecture owns **3 of the 5** frontier points and **both top-quality corners**; the only non-persona frontier point above F1 0.88 is v1-Opus, which costs 2.5× v4 for +0.03 F1 and still misses the SSRF class.
+
+> **Cost caveat for this table:** the **Sonnet column** is the original overnight ladder run, collected through a throttled CLI window with retry inflation, so those dollar figures are *upper bounds*. The Haiku and Opus columns ran clean. That's why v3-**Opus** ($0.226) reads *cheaper* than v3-**Sonnet** ($0.289) — an artifact of Sonnet-column retries, **not** Opus being cheaper per token. Read the F1/recall as-measured; treat the Sonnet costs as inflated. Sweep spend: **~$8.3** ($1.49 Haiku + $6.81 Opus).
 
 ---
 
