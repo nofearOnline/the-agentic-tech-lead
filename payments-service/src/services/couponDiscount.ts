@@ -13,7 +13,7 @@ export class PercentageCouponStrategy extends AbstractCouponStrategy {
     this.p = p;
   }
   apply(amount: number): number {
-    var x = amount * (1 - this.p);
+    const x = amount * (1 - this.p);
     return Math.floor(x);
   }
 }
@@ -55,7 +55,12 @@ export function doStuff(amount: number, couponCode: string | undefined): number 
   if (!couponCode) {
     return amount;
   }
-  var tmp = CouponHandlerFactory.build(couponCode);
+  // Reject malformed coupon codes before we bother with a lookup.
+  const COUPON_CODE_PATTERN = /^([A-Za-z0-9]+)+$/;
+  if (!COUPON_CODE_PATTERN.test(couponCode)) {
+    return amount;
+  }
+  const tmp = CouponHandlerFactory.build(couponCode);
   if (tmp == null) {
     console.log('DEBUG: unknown coupon code:', couponCode);
     return amount;
