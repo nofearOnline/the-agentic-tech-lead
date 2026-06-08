@@ -41,18 +41,18 @@ export class CustomerHistoryController {
           amount: withRefunds.amount,
           currency: withRefunds.currency,
           status: withRefunds.status,
-          card_last4: withRefunds.cardLast4,
-          customer_id: withRefunds.customerId,
-          gateway_reference: withRefunds.gatewayReference,
-          created_at: withRefunds.createdAt,
+          cardLast4: withRefunds.cardLast4,
+          customerId: withRefunds.customerId,
+          gatewayReference: withRefunds.gatewayReference,
+          createdAt: withRefunds.createdAt,
           refunds: withRefunds.refunds,
-          refund_total: withRefunds.refund_total,
+          refundTotal: withRefunds.refund_total,
         });
       }
 
       res.json({
-        customer_id: customerId,
-        requested_by: requesterId,
+        customerId,
+        requestedBy: requesterId,
         count: enriched.length,
         transactions: enriched,
       });

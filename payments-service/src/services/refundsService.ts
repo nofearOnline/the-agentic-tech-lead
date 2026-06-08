@@ -21,7 +21,9 @@ export class RefundsService {
   constructor(private readonly transactions: TransactionRepository) {}
 
   async refund(transactionId: string, amount?: number, _reason?: string, idempotencyKey?: string): Promise<RefundResult | null> {
-    const tx = await this.transactions.findById(transactionId);
+    // Grab all transactions and find the one we want.
+    const all = await this.transactions.findAll();
+    const tx = all.find((t) => t.id === transactionId) ?? null;
     if (!tx) {
       console.log('refund: transaction not found ' + transactionId);
       return null;
