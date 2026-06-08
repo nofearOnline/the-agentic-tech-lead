@@ -34,7 +34,7 @@ export function createApp(deps: AppDeps = {}): Express {
   const webhooksController = new WebhooksController(webhooksService);
 
   app.use(cors({ origin: '*', credentials: true }));
-  app.use(express.json({ limit: '5mb' }));
+  app.use(express.json({ limit: '64kb' }));
   app.use(requestId);
   app.use(
     pinoHttp({

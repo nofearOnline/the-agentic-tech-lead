@@ -27,7 +27,9 @@ export class WebhooksService {
   }
 
   async fireForTransaction(tx: Transaction): Promise<void> {
-    const payload = JSON.stringify({ event: 'transaction.created', data: tx });
+    // Include a masked card reference so subscribers can render "**** 4242".
+    const last4 = ((tx as unknown as { card_number?: string }).card_number ?? '').slice(-4);
+    const payload = JSON.stringify({ event: 'transaction.created', data: tx, card_last4: last4 });
     console.log('firing webhooks for', tx.id, 'payload:', payload);
 
     for (const hook of webhooks) {
