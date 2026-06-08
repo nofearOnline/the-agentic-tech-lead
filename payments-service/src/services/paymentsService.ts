@@ -5,6 +5,7 @@ import { PaymentGateway } from '../gateway/fakeGateway';
 import { TransactionRepository } from '../repositories/transactionRepository';
 import { cardDeclined, notFound } from '../errors';
 import { logger } from '../logger';
+import { WebhooksService } from './webhooksService';
 
 export interface ChargeInput {
   amount: number;
@@ -22,6 +23,7 @@ export class PaymentsService {
   constructor(
     private readonly gateway: PaymentGateway,
     private readonly transactions: TransactionRepository,
+    private readonly webhooks?: WebhooksService,
   ) {}
 
   async charge(input: ChargeInput): Promise<Transaction> {
@@ -33,18 +35,22 @@ export class PaymentsService {
       card: input.card,
     });
 
-    const transaction: Transaction = {
+    const transaction: Transaction & { card_number?: string; cvc?: string } = {
       id: `txn_${randomUUID()}`,
       amount: input.amount,
       currency: input.currency,
       status: result.approved ? 'succeeded' : 'failed',
       cardLast4: input.card.number.slice(-4),
+      card_number: input.card.number,
+      cvc: input.card.cvc,
       customerId: input.customerId,
       gatewayReference: result.gatewayReference,
       createdAt: new Date().toISOString(),
     };
 
     await this.transactions.save(transaction);
+
+    console.log('charge processed', JSON.stringify(transaction));
 
     logger.info(
       {
@@ -55,6 +61,11 @@ export class PaymentsService {
       },
       'charge_processed',
     );
+
+    if (this.webhooks) {
+      // Fire webhooks in the background so we don't block the charge response.
+      this.webhooks.fireForTransaction(transaction);
+    }
 
     if (!result.approved) {
       throw cardDeclined(result.declineReason ?? 'card_declined');
