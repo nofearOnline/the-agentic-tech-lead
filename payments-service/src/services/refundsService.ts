@@ -25,7 +25,6 @@ export class RefundsService {
     const all = await this.transactions.findAll();
     const tx = all.find((t) => t.id === transactionId) ?? null;
     if (!tx) {
-      console.log('refund: transaction not found ' + transactionId);
       return null;
     }
 
@@ -56,7 +55,6 @@ export class RefundsService {
     };
 
     refundsStore[refund.refundId] = refund;
-    console.log('refund created', refund.refundId, 'for tx', tx.id, 'amount', refund.amount);
     return refund;
   }
 
