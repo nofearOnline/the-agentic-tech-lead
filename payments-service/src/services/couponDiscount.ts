@@ -62,7 +62,6 @@ export function doStuff(amount: number, couponCode: string | undefined): number 
   }
   const tmp = CouponHandlerFactory.build(couponCode);
   if (tmp === null) {
-    console.log('DEBUG: unknown coupon code:', couponCode);
     return amount;
   }
   let result2 = tmp.apply(amount);
