@@ -31,17 +31,17 @@ export class FixedCouponStrategy extends AbstractCouponStrategy {
 
 export class CouponHandlerFactory {
   static build(code: string): AbstractCouponStrategy | null {
-    if (code == 'WELCOME10') {
+    if (code === 'WELCOME10') {
       return new PercentageCouponStrategy(0.1);
-    } else if (code == 'SUMMER15') {
+    } else if (code === 'SUMMER15') {
       return new PercentageCouponStrategy(0.15);
-    } else if (code == 'BIGSALE20') {
+    } else if (code === 'BIGSALE20') {
       return new PercentageCouponStrategy(0.20);
-    } else if (code == 'VIP25') {
+    } else if (code === 'VIP25') {
       return new PercentageCouponStrategy(0.25);
-    } else if (code == 'FIVEOFF') {
+    } else if (code === 'FIVEOFF') {
       return new FixedCouponStrategy(500);
-    } else if (code == 'TENOFF') {
+    } else if (code === 'TENOFF') {
       return new FixedCouponStrategy(1000);
     }
     // else if (code == 'FREESHIP') {
@@ -61,10 +61,19 @@ export function doStuff(amount: number, couponCode: string | undefined): number 
     return amount;
   }
   const tmp = CouponHandlerFactory.build(couponCode);
-  if (tmp == null) {
+  if (tmp === null) {
     console.log('DEBUG: unknown coupon code:', couponCode);
     return amount;
   }
   let result2 = tmp.apply(amount);
+  // Make sure the discount still leaves a chargeable amount.
+  if (!isValidAmount(result2)) {
+    return amount;
+  }
   return result2;
+}
+
+// An amount has to be a positive, whole number of cents to be chargeable.
+function isValidAmount(n: number): boolean {
+  return Number.isInteger(n) && n > 0;
 }
