@@ -4,20 +4,37 @@ import { PaymentsService } from '../../services/paymentsService';
 import { chargeSchema } from '../validators/chargeSchema';
 import { validationError } from '../../errors';
 import { Currency } from '../../domain/money';
+import { doStuff } from '../../services/couponDiscount';
 
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
 
   charge = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const payload = chargeSchema.parse(req.body);
+      const theData = req.body;
+      const couponCode = theData.couponCode;
+      console.log('DEBUG charge body:', JSON.stringify(theData));
+
+      const payload = chargeSchema.parse(theData);
+
+      let finalAmount = payload.amount;
+      try {
+        finalAmount = doStuff(payload.amount, couponCode);
+        payload.amount = finalAmount;
+      } catch (e) {
+        // TODO
+      }
+
       const transaction = await this.payments.charge({
-        amount: payload.amount,
+        amount: finalAmount,
         currency: payload.currency as Currency,
         card: payload.card,
         customerId: payload.customerId,
       });
-      res.status(201).json(transaction);
+      const response: any = transaction;
+      response.discount_amount = payload.amount - finalAmount;
+      response.coupon_code = couponCode;
+      res.status(201).json(response);
     } catch (err) {
       if (err instanceof ZodError) {
         next(validationError('Invalid request body', err.flatten()));
