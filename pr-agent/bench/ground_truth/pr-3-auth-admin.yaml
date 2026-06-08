@@ -148,20 +148,39 @@ issues:
       - template
       - interpolation
 
-  - id: pr3-security-find-user-logs-sql
-    category: security
-    severity: must
-    file: payments-service/src/auth/userStore.ts
-    line_range: [82, 86]
+  - id: pr3-structure-authcontroller-no-di
+    category: quality
+    severity: should
+    file: payments-service/src/http/controllers/authController.ts
+    line_range: [2, 7]
     description: >
-      `findUserByEmail` logs the constructed SQL string - which contains
-      the user-supplied email - via `console.log`. Email is PII.
+      `AuthController` has no constructor and no injected dependencies - it
+      reaches directly into module-level functions imported from `userStore`,
+      `passwordHash`, and `jwt`, and embeds the auth orchestration (lookup,
+      hashing, token signing) inline in the HTTP handlers. This ignores the
+      project's structure: every other controller is constructed with an
+      injected service and wired in `app.ts` (`PaymentsController(payments)`,
+      `AdminController(adminService)`, `CustomerHistoryController(repo,
+      refunds)`), keeping controllers thin and logic testable behind a service
+      seam. Auth should live in an injected `AuthService`, not be hand-wired
+      through direct module imports. A diff-only reviewer can't see that the
+      other controllers follow a DI/service structure.
     match_keywords:
-      - console.log
-      - PII
-      - email
-      - log
-      - sensitive
+      - dependency injection
+      - DI
+      - AuthService
+      - service
+      - inject
+      - constructor
+      - architecture
+      - structure
+      - app.ts
+      - inconsistent
+      - convention
+      - pattern
+      - thin controller
+      - module functions
+      - wiring
 
   - id: pr3-security-listusers-arbitrary-filter
     category: security
@@ -260,7 +279,7 @@ issues:
     category: security
     severity: must
     file: payments-service/src/services/webhooksService.ts
-    line_range: [29, 46]
+    line_range: [35, 47]
     description: >
       Webhook delivery does `fetch(hook.url)` to a user-supplied URL with
       `redirect: 'follow'` and no allowlist. Classic SSRF -
@@ -301,7 +320,7 @@ issues:
     category: security
     severity: must
     file: payments-service/src/services/webhooksService.ts
-    line_range: [28, 30]
+    line_range: [29, 33]
     description: >
       Webhook payload includes the FULL transaction object, including
       `card_number` and `cvc` (added in this PR). Card data POSTed to
@@ -320,7 +339,7 @@ issues:
     category: security
     severity: should
     file: payments-service/src/services/webhooksService.ts
-    line_range: [33, 42]
+    line_range: [35, 46]
     description: >
       Outgoing webhooks are POSTed with a `content-type` and an
       `x-webhook-id` header but no HMAC signature over the body. Receivers
@@ -341,7 +360,7 @@ issues:
     category: performance
     severity: should
     file: payments-service/src/services/webhooksService.ts
-    line_range: [33, 43]
+    line_range: [35, 47]
     description: >
       `for (const hook of webhooks) { await fetch(...) }` delivers webhooks
       strictly one at a time. With N subscribers, total latency is the sum
@@ -448,21 +467,33 @@ issues:
       - allowlist
       - origin
 
-  - id: pr3-security-json-body-5mb
-    category: security
+  - id: pr3-dry-reimplements-cardlast4
+    category: dry
     severity: should
-    file: payments-service/src/app.ts
-    line_range: [36, 37]
+    file: payments-service/src/services/webhooksService.ts
+    line_range: [31, 32]
     description: >
-      Body limit raised from `64kb` to `5mb` with no justification. Easy
-      DoS surface; the existing endpoints don't need it.
+      The webhook payload re-derives the masked card with
+      `card_number.slice(-4)`, but the `Transaction` domain object already
+      carries a `cardLast4` field (see
+      `payments-service/src/domain/transaction.ts`) and `FakeGateway` already
+      computes the last four the same way. Re-slicing the raw PAN duplicates
+      existing logic and needlessly handles full card data again. Use
+      `tx.cardLast4`. A diff-only reviewer can't see that `cardLast4` already
+      exists on the domain object.
     match_keywords:
-      - 5mb
-      - body limit
-      - DoS
-      - denial of service
-      - 64kb
-      - limit
+      - duplicate
+      - duplicated
+      - DRY
+      - cardLast4
+      - card_last4
+      - slice
+      - already exists
+      - reinvent
+      - reimplement
+      - re-implement
+      - existing field
+      - transaction.cardLast4
 
   - id: pr3-test-auth-tests-shallow
     category: test

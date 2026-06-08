@@ -52,9 +52,9 @@ issues:
     line_range: [25, 31]
     description: >
       Sort uses `a.created_at` / `b.created_at`, but the Transaction
-      object has `createdAt` (camelCase). The snake_case field is added
-      only at response shaping time, so the sort key is `undefined` for
-      every row - sort is effectively a no-op.
+      object has `createdAt` (camelCase). The snake_case key never exists on
+      the object, so the sort key is `undefined` for every row - sort is
+      effectively a no-op.
     match_keywords:
       - sort
       - created_at
@@ -90,7 +90,7 @@ issues:
     category: correctness
     severity: must
     file: payments-service/src/services/refundsService.ts
-    line_range: [33, 44]
+    line_range: [38, 47]
     description: >
       "Sometimes clients send dollars" heuristic multiplies by 100 and
       hopes for the best. Currency unit should never be inferred - it
@@ -108,7 +108,7 @@ issues:
     category: correctness
     severity: should
     file: payments-service/src/services/refundsService.ts
-    line_range: [22, 50]
+    line_range: [22, 56]
     description: >
       No check against the sum of prior refunds for the same transaction.
       Easy to over-refund by calling /refunds twice.
@@ -145,7 +145,7 @@ issues:
     category: correctness
     severity: should
     file: payments-service/src/services/refundsService.ts
-    line_range: [27, 31]
+    line_range: [32, 36]
     description: >
       `if (refundAmount == null)` defaults to full amount, but explicit
       `0` is accepted as a valid refund. Should reject non-positive
@@ -158,21 +158,35 @@ issues:
       - positive
       - amount
 
-  - id: pr2-quality-console-log-business-events
+  - id: pr2-structure-reinvents-repository
     category: quality
     severity: should
     file: payments-service/src/services/refundsService.ts
-    line_range: [22, 49]
+    line_range: [61, 71]
     description: >
-      `console.log` for "refund created", "transaction not found" and
-      similar business events bypasses the configured Pino logger,
-      breaking structured logging and PII redaction.
+      Refund persistence is hand-rolled: a module-level `refundsStore` object
+      plus a manual `Object.keys(...)` index loop in
+      `listRefundsForTransaction` to find rows. This reinvents the repository
+      abstraction the codebase already establishes - `TransactionRepository`
+      (interface) and `InMemoryTransactionRepository` (a Map-backed store with
+      `findById`/`findAll`) injected into services via `app.ts`. Refunds should
+      have a `RefundRepository` following the same pattern, injected into
+      `RefundsService`, instead of a global object scanned by hand. A diff-only
+      reviewer can't know the repository pattern exists.
     match_keywords:
-      - console.log
-      - pino
-      - logger
-      - structured
-      - log
+      - repository
+      - RefundRepository
+      - reinvent
+      - reimplement
+      - re-implement
+      - abstraction
+      - pattern
+      - InMemoryTransactionRepository
+      - structure
+      - inject
+      - dependency injection
+      - existing
+      - convention
 
   - id: pr2-validation-loose-refund-schema
     category: quality
@@ -226,21 +240,33 @@ issues:
       - meaningful
       - test quality
 
-  - id: pr2-standards-response-naming-snake
-    category: standards
-    severity: suggestion
-    file: payments-service/src/http/controllers/customerHistoryController.ts
-    line_range: [36, 49]
+  - id: pr2-dry-reimplements-findbyid
+    category: dry
+    severity: should
+    file: payments-service/src/services/refundsService.ts
+    line_range: [24, 26]
     description: >
-      Response uses snake_case (`card_number`, `customer_id`,
-      `created_at`) while existing endpoints (`/transactions/:id`) use
-      camelCase. Inconsistent contract.
+      `refund()` looks the transaction up with
+      `(await this.transactions.findAll()).find(t => t.id === transactionId)`,
+      re-implementing the repository's own `findById(id)` - which already
+      exists on `TransactionRepository` (see
+      `payments-service/src/repositories/transactionRepository.ts`) and does an
+      O(1) Map lookup. The new code loads every transaction and linear-scans
+      it. Use the existing `findById`. A diff-only reviewer can't know
+      `findById` exists; you have to read the repository interface.
     match_keywords:
-      - snake_case
-      - camelCase
-      - naming
-      - inconsistent
-      - convention
+      - duplicate
+      - duplicated
+      - DRY
+      - findById
+      - findAll
+      - repository
+      - already exists
+      - reinvent
+      - reimplement
+      - re-implement
+      - linear scan
+      - existing method
 
   # ---- planted after v1 baseline review ----
 
@@ -248,7 +274,7 @@ issues:
     category: correctness
     severity: should
     file: payments-service/src/services/refundsService.ts
-    line_range: [23, 54]
+    line_range: [23, 56]
     description: >
       `refund()` accepts an `idempotencyKey` and stores it on the refund, but
       never looks it up before creating a new refund. Retrying the same

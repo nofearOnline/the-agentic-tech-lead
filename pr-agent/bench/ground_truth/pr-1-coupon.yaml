@@ -144,7 +144,7 @@ issues:
     category: quality
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [53, 65]
+    line_range: [53, 73]
     description: >
       `doStuff`, `tmp`, `result2`, `x`, `p`, `amt`, `theData` - exported
       and internal names are uninformative. The exported entry point in
@@ -181,20 +181,31 @@ issues:
       - exponential
       - event loop
 
-  - id: pr1-standards-loose-equality
-    category: standards
+  - id: pr1-dry-reimplements-amount-validation
+    category: dry
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [32, 58]
+    line_range: [69, 79]
     description: >
-      `==` instead of `===` throughout the coupon code dispatcher and the
-      null-check in `doStuff`. TypeScript projects typically enforce `eqeqeq`.
+      The new `isValidAmount(n)` helper (`Number.isInteger(n) && n > 0`) re-implements
+      `assertPositiveAmount(amount)`, which already lives in
+      `payments-service/src/domain/money.ts` and enforces exactly this rule
+      ("positive integer in the smallest currency unit"). The coupon path
+      should import and reuse the existing domain helper instead of hand-rolling
+      a second, slightly-different amount validator that will drift. A
+      diff-only reviewer can't catch this; you have to know `money.ts` exists.
     match_keywords:
-      - "==="
-      - "=="
-      - loose equality
-      - strict equality
-      - eqeqeq
+      - duplicate
+      - duplicated
+      - DRY
+      - assertPositiveAmount
+      - money.ts
+      - already exists
+      - reinvent
+      - reimplement
+      - re-implement
+      - existing helper
+      - isValidAmount
 
   - id: pr1-quality-dead-code-comment
     category: quality
@@ -214,7 +225,7 @@ issues:
     category: test
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [1, 65]
+    line_range: [1, 79]
     description: >
       A new pricing function with branching, factory dispatch, and silent
       error paths ships with zero unit tests.
@@ -259,18 +270,34 @@ issues:
       - extends
       - implements
 
-  - id: pr1-quality-debug-log-coupon
+  - id: pr1-structure-coupon-free-function-not-service
     category: quality
     severity: should
     file: payments-service/src/services/couponDiscount.ts
-    line_range: [62, 67]
+    line_range: [1, 3]
     description: >
-      `console.log('DEBUG: unknown coupon code:', couponCode)` is a
-      production-path debug log: writes attacker-controlled input to
-      stdout, bypasses the pino logger, and shouldn't be in the diff.
+      Coupon pricing ships as a loose exported `doStuff()` function (the file
+      even carries a `TODO: figure out where this should really live` comment)
+      that `PaymentsController` imports and calls inline. This ignores the
+      project's established architecture: every other capability is a class
+      injected via the constructor and wired in `app.ts` (`PaymentsService`,
+      `RefundsService`, `AdminService`, `WebhooksService`), and controllers
+      stay thin by delegating to an injected service. Coupon logic should be a
+      `CouponService` (or a method on `PaymentsService`) behind DI, not a free
+      function reached through a direct import. A diff-only reviewer can't see
+      that the rest of the codebase follows a service/DI structure.
     match_keywords:
-      - console.log
-      - DEBUG
-      - debug log
-      - log injection
-      - pino
+      - dependency injection
+      - DI
+      - service
+      - CouponService
+      - inject
+      - architecture
+      - structure
+      - free function
+      - app.ts
+      - inconsistent
+      - convention
+      - pattern
+      - thin controller
+      - where this should live
