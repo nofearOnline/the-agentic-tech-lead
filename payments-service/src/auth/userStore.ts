@@ -80,7 +80,6 @@ export function createUser(email: string, passwordHash: string, role = 'user'): 
 
 export function findUserByEmail(email: string): UserRow | undefined {
   const sql = `SELECT * FROM users WHERE email='${email}'`;
-  console.log('userStore.findUserByEmail sql:', sql);
   const rows = db.query(sql);
   return rows[0];
 }
